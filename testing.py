@@ -2,8 +2,11 @@ from analysis import collider_analyses_from_long_YAML
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import massminimize as mm
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
 
-N = int(1e1)
+N = int(1e3)
 
 print("Starting...")
 
@@ -11,42 +14,154 @@ print("Starting...")
 f = 'old_junk/CBit_analyses.yaml'
 stream = open(f, 'r')
 analyses_read, SR_map = collider_analyses_from_long_YAML(stream,replace_SR_names=True)
+#analyses_read = analyses_read[1:10] # For testing
+#analyses_read = [analyses_read[0]] # For testing
+#aanalyses_read = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
 stream.close()
 
-def get_null_model():
+s_in = [1,2]
+nosignal = {a.name: {sr: tf.constant([0],dtype=float) for sr in a.SR_names} for a in analyses_read}
+signal = {a.name: {sr: tf.constant(s_in,dtype=float) for sr in a.SR_names} for a in analyses_read}
+
+def get_null_model(signal):
     null_dists = []
+    layouts = []
+    counts = []
     for a in analyses_read:
-        signal = {sr: 0 for sr in a.SR_names}
-        null_dists += a.tensorflow_null_model(signal)
-    return tfd.JointDistributionSequential(null_dists)
+        d, layout, count = a.tensorflow_null_model(signal[a.name])
+        null_dists += d
+        layouts += [layout]
+        counts += [count]
+    return tfd.JointDistributionSequential(null_dists), layouts, counts
 
-def get_free_model(pars):
+def get_free_model(pars,signal):
     free_dists = []
+    layouts = []
+    counts = []
     for a in analyses_read:
-        signal = {sr: 0 for sr in a.SR_names}
-        free_dists += a.tensorflow_free_model(signal,pars[a.name])
-    return tfd.JointDistributionSequential(free_dists)
+        d, layout, count = a.tensorflow_free_model(signal[a.name],pars[a.name])
+        free_dists += d
+        layouts += [layout]
+        counts += [count]
+    return tfd.JointDistributionSequential(free_dists), layouts, counts
 
-def get_free_parameters():
+def get_free_parameters(samples,layouts,counts,signal):
+    """Samples vector and layout provided to compute good starting guesses for parameters"""
     pars = {}
-    for a in analyses_read:
-        pars[a.name] = a.get_tensorflow_variables()
+    i = 0
+    for a,layout,count in zip(analyses_read,layouts,counts):
+        X = samples[i:i+count]
+        i += count
+        pars[a.name] = a.get_tensorflow_variables(X,layout,signal[a.name])
     return pars
 
-joint0 = get_null_model()
+joint0, layouts, counts = get_null_model(nosignal)
+joint0s, layouts, counts = get_null_model(signal)
+
+#print("layouts:", layouts)
+#print("counts:", counts)
 
 # Generate background-only pseudodata to be fitted
 samples0 = joint0.sample(N)
- 
+
+# Generate signal pseudodata to be fitted
+samples0s = joint0s.sample(N)
+
+# Re-package samples according to analysis (so that we can
+# compute starting guesses for parameter fits informed by the
+# samples)
+
+
 #print(samples0)
 
 # Define loss function to be minimized
-def glob_chi2(pars,data):
-    joint_s = get_free_model(pars)
-    return -2*joint_s.log_prob(data), None, None
+# Use @tf.function decorator to compile target function into graph mode for faster evaluation
+# Takes a while to compile the graph at startup, but execution is quite a bit faster
+# Turn off for rapid testing, turn on for production.
+#@tf.function
+def glob_chi2(pars,data,signal=signal):
+    joint_s, layouts, counts = get_free_model(pars,signal)
+    q = -2*joint_s.log_prob(data)
+    total_loss = tf.math.reduce_sum(q)
+    return total_loss, None, q
 
 # Get dictionary of tensorflow variables for input into optimizer
-pars = get_free_parameters()
 #print("Flatten pars list:", list(flatten(pars)))
-mm.optimize(pars,mm.tools.func_partial(glob_chi2,data=samples0),step=0.01,tol=0.1,grad_tol=1e-4)
+
+opts = {"optimizer": "Adam",
+        "step": 0.001,
+        "tol": 0.1,
+        "grad_tol": 1e-4,
+        "max_it": 50,
+        "max_same": 5
+        }
+
+print("Fitting signal hypothesis")
+pars = get_free_parameters(samples0,layouts,counts,signal)
+pars, qsb = mm.optimize(pars,mm.tools.func_partial(glob_chi2,data=samples0,signal=signal),**opts)
+pars_s = get_free_parameters(samples0s,layouts,counts,signal)
+pars_s, qsb_s = mm.optimize(pars_s,mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal),**opts)
+
+print("Fitting background-only hypothesis")
+parsb = get_free_parameters(samples0,layouts,counts,nosignal)
+parsb, qb = mm.optimize(parsb,mm.tools.func_partial(glob_chi2,data=samples0,signal=nosignal),**opts)
+parsb_s = get_free_parameters(samples0s,layouts,counts,nosignal)
+parsb_s, qb_s = mm.optimize(parsb_s,mm.tools.func_partial(glob_chi2,data=samples0s,signal=nosignal),**opts)
+
+q = qsb - qb
+q_s = qsb_s - qb_s
+
+nplots = len(s_in)
+fig = plt.figure(figsize=(12,4*nplots))
+for i in range(nplots):
+    ax1 = fig.add_subplot(nplots,2,2*i+1)
+    ax2 = fig.add_subplot(nplots,2,2*i+2)
+    ax2.set(yscale="log")
+
+    qb  = q[:,i].numpy()
+    qsb = q_s[:,i].numpy()
+    if np.sum(np.isfinite(qb)) < 2:
+        print("qb mostly nan!")
+    if np.sum(np.isfinite(qsb)) < 2:
+        print("qsb mostly nan!")
+    qb = qb[np.isfinite(qb)]
+    qsb = qsb[np.isfinite(qsb)]
+
+    sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+    sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+
+    # # Compute and plot asymptotic distributions!
+    # var_mu_sb = 1/tf.abs(qAsb[i]) 
+    # var_mu_b  = 1/tf.abs(qAb[i]) 
+
+    # Eq_sb = -1 / var_mu_sb
+    # Eq_b  = 1 / var_mu_b
+
+    # Vq_sb = 4 / var_mu_sb
+    # Vq_b  = 4 / var_mu_b
+
+    # qsbx = np.linspace(np.min(qsb),np.max(qsb),1000)
+    # qsby = tf.math.exp(tfd.Normal(loc=Eq_sb, scale=tf.sqrt(Vq_sb)).log_prob(qsbx)) 
+    # sns.lineplot(qsbx,qsby,color='r',ax=ax1)
+    # qbx = np.linspace(np.min(qb),np.max(qb),1000)
+    # qby = tf.math.exp(tfd.Normal(loc=Eq_b, scale=tf.sqrt(Vq_b)).log_prob(qbx)) 
+    # sns.lineplot(qbx,qby,color='b',ax=ax1)
+
+
+    #qx = np.linspace(np.min(q),np.max(q),1000)
+    #qy = np.exp(tfd.Chi2(df=Npars).log_prob(qx))
+    #sns.lineplot(qx,qy)
+    sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+    sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+    #sns.lineplot(qbx, qby,color='b',ax=ax2)
+    #sns.lineplot(qsbx,qsby,color='r',ax=ax2)
+
+    #sns.lineplot(qx,qy)
+    #ax.set_ylim(1./N,1.01*np.max(q)]))
+    ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+
+plt.tight_layout()
+fig.savefig("qsb_dists.png")
+
 
