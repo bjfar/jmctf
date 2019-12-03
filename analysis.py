@@ -13,7 +13,7 @@ yaml.add_representer(blockseqtrue, blockseqtrue_rep)
 
 # Want to convert all this to YAML. Write a simple container to help with this.
 class ColliderAnalysis:
-    def __init__(self,name,srs=None,cov=None,cov_order=None,unlisted_corr_zero=False):
+    def __init__(self,name,srs=None,cov=None,cov_order=None,unlisted_corr_zero=False,verify=True):
         self.name = name
         self.cov = cov
         self.cov_order = cov_order
@@ -33,6 +33,7 @@ class ColliderAnalysis:
                 self.SR_n[i]     = sr[1]
                 self.SR_b[i]     = sr[2]
                 self.SR_b_sys[i] = sr[3]
+        if verify: self.verify() # Set this flag zero for "manual" data input
 
     def get_cov_order(self):
         cov_order = None
@@ -45,6 +46,14 @@ class ColliderAnalysis:
                 cov_order = self.cov_order
         return cov_order
 
+    def verify(self):
+        """Check that internal data makes sense, and warn user about potential issues"""
+        #for i, sr in enumerate(self.SR_names):
+        #    if self.SR_b[i]==0:
+        #        print("WARNING! Expected background is exactly zero for region {0} in analysis {1}. This doesn't make sense. We will add a tiny offset to make it numerically tractable, but please check your input data!".format(sr, self.name)) 
+        #        self.SR_b[i] += 1e-10
+        # Actually no, should be ok given the systematic.
+
     def tensorflow_model(self,signal,nuispars):
         """Output tensorflow probability model object, to be combined together and
            sampled from. Signal parameters should all be fixed."""
@@ -53,16 +62,23 @@ class ColliderAnalysis:
         # semantics of tensorflow_probability.
 
         cov_order = self.get_cov_order()
- 
+        small = 1e-10
+
         tfds = []
         sample_count = 0 # Length of sample vector for this model
         sample_layout = [] # Record of structure of sample vector, so we can interpret it later
-        for sr, bexp in zip(self.SR_names, self.SR_b):
+        for sr, bexp, bsysin in zip(self.SR_names, self.SR_b, self.SR_b_sys):
             s = signal[sr]
             b = tf.constant(bexp,dtype=float)
+            bsys = tf.constant(bsysin,dtype=float)
+            theta = nuispars[sr] * bsys
+
+            # Check if we are wandering outside parameter boundaries
+            m_out = (s+b+theta < 0)
+            theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe")
 
             # Poisson model
-            poises0  = tfd.Poisson(rate = s+b)
+            poises0  = tfd.Poisson(rate = s+b+theta, interpolate_nondiscrete=True) # TODO: Asimov variance isn't matching if I add theta here. Doesn't make sense? Or I am compute Asimov data wrong...
             tfds += [poises0]
             sample_layout += [(sr,"n",1)] # Signal region, sample name, sample vector length
             sample_count += 1
@@ -70,11 +86,15 @@ class ColliderAnalysis:
         # Put all the nuisance parameter sample at the end of the vector, so that it
         # is the same structure whether they come from a multivariate normal or multiple
         # indepdent normal distributions.
-        for sr, bsysin in zip(self.SR_names, self.SR_b_sys):
-            bsys = tf.constant(bsysin,dtype=float)
-            #bsys_tmp = tf.expand_dims(tf.constant(bsysin,dtype=float),0) # Need to match shape of signal input
-            #bsys = tf.broadcast_to(bsys_tmp,shape=signal[sr].shape)
+        for sr, bexp, bsysin in zip(self.SR_names, self.SR_b, self.SR_b_sys):
             if self.cov is None or sr not in cov_order:
+                s = signal[sr]
+                b = tf.constant(bexp,dtype=float)
+                bsys = tf.constant(bsysin,dtype=float)
+                bsys = tf.constant(bsysin,dtype=float)
+                #bsys_tmp = tf.expand_dims(tf.constant(bsysin,dtype=float),0) # Need to match shape of signal input
+                #bsys = tf.broadcast_to(bsys_tmp,shape=signal[sr].shape)
+
                 # if no covariance info for this SR:
                 #  Either 1. combine assuming independent, or 2. need to select one SR to use.
                 #  For now just do 1. TODO: will need 2 also at some point
@@ -82,7 +102,10 @@ class ColliderAnalysis:
                 # Nuisance parameters, use nominal null values (independent Gaussians to model background/control measurements)
                 # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
                 theta = nuispars[sr] * bsys
-                nuis0 = tfd.Normal(loc = theta, scale = bsys) # I forget if bsys includes the Poisson uncertainty on b TODO: Check this!
+                m_out = (s+b+theta < 0)
+                theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe") # Just for consistency with Poisson parameter
+
+                nuis0 = tfd.Normal(loc = theta_safe, scale = bsys) # I forget if bsys includes the Poisson uncertainty on b TODO: Check this!
                 tfds += [nuis0]
                 sample_layout += [(sr,"x",1)]
                 sample_count += 1
@@ -134,7 +157,7 @@ class ColliderAnalysis:
            certain test statistics"""
 
         # Need to manually set Asimov samples for the model according to the sample layout
-        Asamples = [];
+        Asamples = []        
         name_to_index = {sr: i for i,sr in enumerate(self.SR_names)}
         signal_len = len(signal[self.SR_names[0]]) # TODO: Should be the same for all SRs, could check this.
         for name, v, count in sample_layout:
@@ -170,7 +193,7 @@ class ColliderAnalysis:
               dictionary of signal parameter tensors to use
         """
 
-        sig = {sr: tf.constant(signal[sr], dtype=float) for sr in self.SR_names}
+        sig = {sr: signal[sr] for sr in self.SR_names}
         tfds, sample_layout, sample_count = self.tensorflow_model(sig,thetas)
         return tfds, sample_layout, sample_count 
        
@@ -313,10 +336,14 @@ class ColliderAnalysis:
             #print("theta_MLE[m1]",theta_MLE[m1])
             theta_MLE[m1] = -((s+b)*bcast + np.abs(r1)*threshold)[m1] # Make sure still positive after numerics
             theta_MLE[m2] = -((s+b)*bcast + np.abs(r2)*threshold)[m2]
-            if np.sum(mf & ~(fix1 | fix2) > 0):
-                for r1i, r2i in zip(r1[mf],r2[mf]):
-                    print("r1: {0}, r2: {1}, s+b: {2}".format(r1i,r2i,s+b))
-                raise ValueError("Found both solutions forbidden (and unfixable) for some MLEs! I'm pretty sure this shouldn't happen so I'm calling it an error/bug in the calculation") 
+            #if np.sum(mf & ~(fix1 | fix2) > 0):
+            #    for r1i, r2i in zip(r1[mf],r2[mf]):
+            #        print("r1: {0}, r2: {1}, s+b: {2}".format(r1i,r2i,s+b))
+            #    raise ValueError("Found both solutions forbidden (and unfixable) for some MLEs! I'm pretty sure this shouldn't happen so I'm calling it an error/bug in the calculation") 
+            # Edit: I think the above can happen for super low background signal regions. Then the nuisance fluctuation can make even the effective background estimate negative. So I think here we just have to stick the MLE on the boundary of the parameter space.
+            mbound = mf & ~(fix1 | fix2)
+            theta_MLE[mbound] = (-(s+b)*bcast + threshold)[mbound]
+
             #d1 = (r1 - (n - s - b))**2
             #d2 = (r2 - (n - s - b))**2
             # Or the closest to the MLE using a normal approximation for the Poisson? And fixing variance with theta=0...
@@ -376,6 +403,9 @@ class ColliderAnalysis:
             #     for soli, r1i, r2i in zip(theta_MLE[acheck],r1[acheck],r2[acheck]):
             #        print("MLE: {0}, r1: {1}, r2: {2}, s+b: {3}, ? {4}".format(soli,r1i,r2i,s+b,s+b+r1i >= -np.abs(r1i)*1e-6))
             #     raise ValueError("Computed {0} forbidden seeds (from {1} samples)! There is therefore a bug in the seed calculations".format(np.sum(acheck),acheck.shape))
+            # Did we get everything? Are there any NaNs left?
+            nnans = np.sum(~np.isfinite(theta_MLE))
+            if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
             seeds[sr]['theta'] = theta_MLE / bsys # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
         #print("seeds:", seeds)
         #quit()
@@ -393,8 +423,8 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     for k,v in d.items():
         if replace_SR_names:
             # TensorFlow cannot handle some characters, so switch SR names to something simple
-            SR_name_translation = {"SR{0}".format(nextID+i): sr[0] for i,sr in enumerate(v["Signal regions"])}
-            srs = [["SR{0}".format(i)]+sr[1:] for i,sr in enumerate(v["Signal regions"])]
+            SR_name_translation.update({"SR{0}".format(nextID+i): sr[0] for i,sr in enumerate(v["Signal regions"])})
+            srs = [["SR{0}".format(nextID+i)]+sr[1:] for i,sr in enumerate(v["Signal regions"])]
             nextID += len(srs)
         else:
             srs = v["Signal regions"]
