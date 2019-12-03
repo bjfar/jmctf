@@ -80,7 +80,8 @@ class ColliderAnalysis:
                 #  For now just do 1. TODO: will need 2 also at some point
          
                 # Nuisance parameters, use nominal null values (independent Gaussians to model background/control measurements)
-                theta = nuispars[sr]
+                # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
+                theta = nuispars[sr] * bsys
                 nuis0 = tfd.Normal(loc = theta, scale = bsys) # I forget if bsys includes the Poisson uncertainty on b TODO: Check this!
                 tfds += [nuis0]
                 sample_layout += [(sr,"x",1)]
@@ -88,8 +89,9 @@ class ColliderAnalysis:
 
         if self.cov is not None:
             # Construct multivariate normal model for background/control measurements
-            theta_vec = tf.stack([nuispars[sr] for sr in cov_order],axis=-1) 
             cov = tf.constant(self.cov,dtype=float)
+            # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
+            theta_vec = tf.stack([nuispars[sr]*np.sqrt(self.cov[i][i]) for i,sr in enumerate(cov_order)],axis=-1) 
             #cov = tf.expand_dims(tf.constant(self.cov,dtype=float),0) # Need to match nuisance par shape (may be one for each of many signal hypotheses)
             #print("theta_vec.shape:",theta_vec.shape)
             #print("cov.shape:",cov.shape)
@@ -105,7 +107,9 @@ class ColliderAnalysis:
         sig = {sr: tf.constant(signal[sr], dtype=float) for sr in self.SR_names}
         zeros = {sr: tf.constant([0]*len(signal[sr]), dtype=float) for sr in self.SR_names}
         tfds, sample_layout, sample_count = self.tensorflow_model(sig,zeros)
-        return tfds, sample_layout, sample_count
+        # Get Asimov samples while we are at it
+        Asamples = self.get_Asimov_samples(sample_layout,signal)
+        return tfds, sample_layout, sample_count, Asamples
 
     def samples_to_dict(self,samples,sample_layout):
         """Convert vector of samples into dictionary for easier usage"""
@@ -113,6 +117,8 @@ class ColliderAnalysis:
         i=0
         for name, v, count in sample_layout:
             if name=='cov':
+                if v!='x':
+                    raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
                 for j,sr in enumerate(self.get_cov_order()):
                     if sr not in sample_dict: sample_dict[sr] = {}
                     sample_dict[sr]['x'] = samples[i][...,j]
@@ -121,6 +127,33 @@ class ColliderAnalysis:
                 sample_dict[name][v] = samples[i]
             i+=count
         return sample_dict
+
+    def get_Asimov_samples(self,sample_layout,signal):
+        """Construct 'Asimov' samples for this analysis
+           Used to detemine asymptotic distribtuions of 
+           certain test statistics"""
+
+        # Need to manually set Asimov samples for the model according to the sample layout
+        Asamples = [];
+        name_to_index = {sr: i for i,sr in enumerate(self.SR_names)}
+        signal_len = len(signal[self.SR_names[0]]) # TODO: Should be the same for all SRs, could check this.
+        for name, v, count in sample_layout:
+            if name=='cov':
+                if v!='x':
+                    raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
+                cov_order = self.get_cov_order()
+                Xsamp = np.zeros((signal_len,len(cov_order)))
+                for j,sr in enumerate(self.get_cov_order()):
+                    i = name_to_index[sr]
+                    Xsamp[:,j] = 0 * signal[sr]
+                Asamples += [Xsamp]
+            else:
+                i = name_to_index[name]
+                if v=='n':
+                    Asamples += [self.SR_b[i] + signal[name]] # signal region counts
+                elif v=='x':
+                    Asamples += [0 * signal[name]] # control measurements
+        return Asamples 
 
     def get_tensorflow_variables(self,samples,sample_layout,signal):
         """Get parameters to be optimized, for input to "tensorflow_free_model"""
@@ -213,6 +246,7 @@ class ColliderAnalysis:
 
             # From object member variables
             b = tf.constant(self.SR_b[i],dtype=float)
+
             bsys = tf.constant(self.SR_b_sys[i],dtype=float)
 
             # Math!
@@ -342,7 +376,7 @@ class ColliderAnalysis:
             #     for soli, r1i, r2i in zip(theta_MLE[acheck],r1[acheck],r2[acheck]):
             #        print("MLE: {0}, r1: {1}, r2: {2}, s+b: {3}, ? {4}".format(soli,r1i,r2i,s+b,s+b+r1i >= -np.abs(r1i)*1e-6))
             #     raise ValueError("Computed {0} forbidden seeds (from {1} samples)! There is therefore a bug in the seed calculations".format(np.sum(acheck),acheck.shape))
-            seeds[sr]['theta'] = theta_MLE
+            seeds[sr]['theta'] = theta_MLE / bsys # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
         #print("seeds:", seeds)
         #quit()
         return seeds
