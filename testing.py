@@ -14,9 +14,9 @@ print("Starting...")
 f = 'old_junk/CBit_analyses.yaml'
 stream = open(f, 'r')
 analyses_read, SR_map = collider_analyses_from_long_YAML(stream,replace_SR_names=True)
-analyses_read = analyses_read[1:10] # For testing
+#analyses_read = analyses_read[1:10] # For testing
 #analyses_read = [analyses_read[1]] # For testing
-#aanalyses_read = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
+analyses_read = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
 stream.close()
 
 s_in = [1,2]
