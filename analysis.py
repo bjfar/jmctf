@@ -63,7 +63,7 @@ class ColliderAnalysis:
 
         cov_order = self.get_cov_order()
         small = 1e-10
-
+        #print("pars:",pars)
         tfds = {}
         sample_count = 0 # Length of sample vector for this model
         sample_layout = [] # Record of structure of sample vector, so we can interpret it later
@@ -167,15 +167,16 @@ class ColliderAnalysis:
         """
         Asamples = {}
         for i,sr in enumerate(self.SR_names):
-            Asamples["{0}::n".format(sr)] = self.SR_b[i] + signal_pars['{0}::s'.format(sr)]
-            Asamples["{0}::x".format(sr)] =            0 * signal_pars['{0}::s'.format(sr)]
+            s = signal_pars['{1}::s'.format(self.name,sr)]
+            Asamples["{0}::{1}::n".format(self.name,sr)] = self.SR_b[i] + s
+            Asamples["{0}::{1}::x".format(self.name,sr)] = 0*s             
         return Asamples
 
     def get_nuisance_tensorflow_variables(self,sample_dict,signal):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
         # TODO: initial value (guess) for nuisance pars needs to be set carefully
         seeds = self.get_seeds_nuis(sample_dict,signal)
-        thetas = {sr: tf.Variable(seeds[sr]['theta'], dtype=float, name='theta_{0}'.format(sr)) for sr in self.SR_names}
+        thetas = {"{0}::theta".format(sr): tf.Variable(seeds[sr]['theta'], dtype=float, name='theta_{0}'.format(sr)) for sr in self.SR_names}
         return thetas
 
     # def tensorflow_null_model(self,signal):
@@ -260,9 +261,9 @@ class ColliderAnalysis:
         for i,sr in enumerate(self.SR_names): 
             seeds[sr] = {}
             # From input
-            n = samples[sr]['n'] 
-            x = samples[sr]['x']
-            s = signal_pars[sr]['s']
+            n = samples['{0}::{1}::n'.format(self.name,sr)] 
+            x = samples['{0}::{1}::x'.format(self.name,sr)]
+            s = signal_pars['{0}::s'.format(sr)]
 
             #print("s:", s)
             #print("n:", n)
@@ -414,7 +415,7 @@ class ColliderAnalysis:
 
 class JMCJoint(tfd.JointDistributionNamed):
     """Object to combine analyses together and treat them as a single
-       joint distribution. Uses JointDistributionNamed for some
+       joint distribution. Uses JointDistributionNamed for most of the
        underlying work.
        
        analyses - list of analysis-like objects to be combined
@@ -426,37 +427,13 @@ class JMCJoint(tfd.JointDistributionNamed):
     def __init__(self, analyses, pars):
         self.analyses = analyses
         dists = {}
-        #self.layouts = []
-        #self.counts = []
-        self.Asamples = []
+        self.Asamples = {}
         for a in analyses:
             d = a.tensorflow_model(pars[a.name])
             dists.update(d)
-            #self.layouts += [layout]
-            #self.counts += [count]
-            self.Asamples += a.get_Asimov_samples(pars[a.name])
-        print("dists:", dists)
-        super().__init__(dists)
+            self.Asamples.update(a.get_Asimov_samples(pars[a.name]))
+        super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
         self.dists = dists
-
-    #def sample(self,N):
-    #    """Rather than return samples as a list, as JointDistributionSequential does,
-    #       re-format them into a dictionary that is way easier to understand"""
-    #    X = self.joint_dist.sample(N)
-    #    Xdict = {}
-    #    i=0
-    #    for a,layout,count in zip(self.analyses,self.layouts,self.counts):
-    #        Xdict[a.name] = a.samples_to_dict(X[i:i+count],layout)
-    #    return Xdict
-
-    #def log_prob(self,sampledict):
-    #    """Convert sample dict back to list and evaluate PDF"""
-    #    X = []
-    #    for a, layout in zip(self.analyses,self.layouts):
-    #        X += a.dict_to_samples(sampledict[a.name],layout)
-    #    print("X:",X)
-    #    return self.joint_dist.log_prob(X) 
-
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
