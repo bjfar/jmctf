@@ -1,4 +1,4 @@
-from analysis import collider_analyses_from_long_YAML
+from analysis import collider_analyses_from_long_YAML, JMCJoint
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import massminimize as mm
@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-N = int(1e3)
+N = int(5e4)
 
 print("Starting...")
 
@@ -15,64 +15,75 @@ f = 'old_junk/CBit_analyses.yaml'
 stream = open(f, 'r')
 analyses_read, SR_map = collider_analyses_from_long_YAML(stream,replace_SR_names=True)
 #print(analyses_read[16].name, SR_map["SR220"]); quit()
-#analyses_read = analyses_read[10:] # For testing
-#analyses_read = [analyses_read[16]] # For testing
-analyses_read = [analyses_read[1]] # For testing
-#analyses_read = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
+#analyses = analyses_read[10:] # For testing
+#analyses = [analyses_read[16]] # For testing
+#analyses = [analyses_read[1]] # For testing
+#analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
+analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
 stream.close()
 
 s_in = [1]
-nosignal = {a.name: {sr: tf.constant([1e-10],dtype=float) for sr in a.SR_names} for a in analyses_read}
-signal = {a.name: {sr: tf.constant(s_in,dtype=float) for sr in a.SR_names} for a in analyses_read}
+nosignal = {a.name: {'{0}::s'.format(sr): tf.constant([1e-10],dtype=float) for sr in a.SR_names} for a in analyses}
+signal = {a.name: {'{0}::s'.format(sr): tf.constant(s_in,dtype=float) for sr in a.SR_names} for a in analyses}
+nullnuis = {a.name: {'nuisance': None} for a in analyses} # Use to automatically set nuisance parameters to zero for sample generation
 
-def get_null_model(signal):
-    null_dists = []
-    layouts = []
-    counts = []
-    Asamples = []
-    for a in analyses_read:
-        d, layout, count, asimov = a.tensorflow_null_model(signal[a.name])
-        null_dists += d
-        layouts += [layout]
-        counts += [count]
-        Asamples += asimov
-    return tfd.JointDistributionSequential(null_dists), layouts, counts, Asamples, null_dists
+print(nosignal)
+print(nullnuis)
 
-def get_free_model(pars,signal):
-    free_dists = []
-    layouts = []
-    counts = []
-    for a in analyses_read:
-        d, layout, count = a.tensorflow_free_model(signal[a.name],pars[a.name])
-        free_dists += d
-        layouts += [layout]
-        counts += [count]
-    return tfd.JointDistributionSequential(free_dists), layouts, counts, free_dists
+def deep_merge(a, b):
+    """
+    From https://stackoverflow.com/a/56177639/1447953
+    Merge two values, with `b` taking precedence over `a`.
 
-def get_Asimov_samples(signal):
-    samples = []
-    for a in analyses_read:
-        samples += s.get_Asimov_samples(signal)
-    return samples
+    Semantics:
+    - If either `a` or `b` is not a dictionary, `a` will be returned only if
+      `b` is `None`. Otherwise `b` will be returned.
+    - If both values are dictionaries, they are merged as follows:
+        * Each key that is found only in `a` or only in `b` will be included in
+          the output collection with its value intact.
+        * For any key in common between `a` and `b`, the corresponding values
+          will be merged with the same semantics.
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return a if b is None else b
+    else:
+        # If we're here, both a and b must be dictionaries or subtypes thereof.
 
-def get_free_parameters(samples,layouts,counts,signal):
-    """Samples vector and layout provided to compute good starting guesses for parameters"""
+        # Compute set of all keys in both dictionaries.
+        keys = set(a.keys()) | set(b.keys())
+
+        # Build output dictionary, merging recursively values with common keys,
+        # where `None` is used to mean the absence of a value.
+        return {
+            key: deep_merge(a.get(key), b.get(key))
+            for key in keys
+        }
+
+def get_nuis_parameters(analyses,signal,samples):
+    """Samples vector and signal provided to compute good starting guesses for parameters"""
     pars = {}
-    i = 0
-    for a,layout,count in zip(analyses_read,layouts,counts):
-        X = samples[i:i+count]
-        i += count
-        pars[a.name] = a.get_tensorflow_variables(X,layout,signal[a.name])
+    for a in analyses:
+        pars[a.name] = a.get_nuisance_tensorflow_variables(samples[a.name],signal[a.name])
     return pars
 
-joint0, layouts, counts, samplesAb, distb = get_null_model(nosignal)
-joint0s, layouts, counts, samplesAsb, distsb = get_null_model(signal)
+print(deep_merge(nosignal,nullnuis))
+
+joint0  = JMCJoint(analyses,deep_merge(nosignal,nullnuis))
+joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
+
+samplesAb = joint0.Asamples
+samplesAsb = joint0s.Asamples 
+
+#joint0, layouts, counts, samplesAb, distb = get_null_model(nosignal)
+#joint0s, layouts, counts, samplesAsb, distsb = get_null_model(signal)
 
 #print("layouts:", layouts)
-#print("samplesAb:", samplesAb)
+print("samplesAb:", samplesAb)
 #print("samplesAsb:", samplesAsb)
 #print("counts:", counts)
 
+print("dict samples?:",joint0.sample(N))
+ 
 # Inspect Asimov samples
 # and test pdf evaluation dist by dist
 
@@ -145,11 +156,13 @@ if do_MC:
     # Use @tf.function decorator to compile target function into graph mode for faster evaluation
     # Takes a while to compile the graph at startup, but execution is quite a bit faster
     # Turn off for rapid testing, turn on for production.
-    #@tf.function
+    @tf.function
     def glob_chi2(pars,data,signal=signal):
-        joint_s, layouts, counts, dists = get_free_model(pars,signal)
+        print("pars:",pars)
+        print("signal:",signal)
+        joint_s = JMCJoint(analyses,deep_merge(pars,signal))
         q = -2*joint_s.log_prob(data)
-        #q = -2*get_logp(layouts,dists,data)
+        print("q:",q)
         total_loss = tf.math.reduce_sum(q)
         return total_loss, None, q
     
@@ -165,15 +178,15 @@ if do_MC:
             }
     
     print("Fitting signal hypothesis")
-    pars_s = get_free_parameters(samples0s,layouts,counts,signal)
+    pars_s = get_nuis_parameters(analyses,signal,samples0s)
     pars_s, qsb_s = mm.optimize(pars_s,mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal),**opts)
-    pars = get_free_parameters(samples0,layouts,counts,signal)
+    pars = get_nuis_parameters(analyses,signal,samples0)
     pars, qsb = mm.optimize(pars,mm.tools.func_partial(glob_chi2,data=samples0,signal=signal),**opts)
     
     print("Fitting background-only hypothesis")
-    parsb = get_free_parameters(samples0,layouts,counts,nosignal)
+    parsb = get_nuis_parameters(analyses,nosignal,samples0)
     parsb, qb = mm.optimize(parsb,mm.tools.func_partial(glob_chi2,data=samples0,signal=nosignal),**opts)
-    parsb_s = get_free_parameters(samples0s,layouts,counts,nosignal)
+    parsb_s = get_nuis_parameters(analyses,nosignal,samples0s)
     parsb_s, qb_s = mm.optimize(parsb_s,mm.tools.func_partial(glob_chi2,data=samples0s,signal=nosignal),**opts)
     
     q = qsb - qb

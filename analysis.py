@@ -54,7 +54,7 @@ class ColliderAnalysis:
         #        self.SR_b[i] += 1e-10
         # Actually no, should be ok given the systematic.
 
-    def tensorflow_model(self,signal,nuispars):
+    def tensorflow_model(self,pars):
         """Output tensorflow probability model object, to be combined together and
            sampled from. Signal parameters should all be fixed."""
 
@@ -64,14 +64,17 @@ class ColliderAnalysis:
         cov_order = self.get_cov_order()
         small = 1e-10
 
-        tfds = []
+        tfds = {}
         sample_count = 0 # Length of sample vector for this model
         sample_layout = [] # Record of structure of sample vector, so we can interpret it later
         for sr, bexp, bsysin in zip(self.SR_names, self.SR_b, self.SR_b_sys):
-            s = signal[sr]
+            s = pars['{0}::s'.format(sr)]
             b = tf.constant(bexp,dtype=float)
             bsys = tf.constant(bsysin,dtype=float)
-            theta = nuispars[sr] * bsys
+            if 'nuisance' in pars.keys() and pars['nuisance'] is None:
+                # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+                pars['{0}::theta'.format(sr)] = tf.constant(0*s)
+            theta = pars['{0}::theta'.format(sr)] * bsys
 
             # Check if we are wandering outside parameter boundaries
             m_out = (s+b+theta < 0)
@@ -79,16 +82,14 @@ class ColliderAnalysis:
 
             # Poisson model
             poises0  = tfd.Poisson(rate = s+b+theta, interpolate_nondiscrete=True) # TODO: Asimov variance isn't matching if I add theta here. Doesn't make sense? Or I am compute Asimov data wrong...
-            tfds += [poises0]
-            sample_layout += [(sr,"n",1)] # Signal region, sample name, sample vector length
-            sample_count += 1
+            tfds["{0}::{1}::n".format(self.name,sr)] = poises0
 
         # Put all the nuisance parameter sample at the end of the vector, so that it
         # is the same structure whether they come from a multivariate normal or multiple
         # indepdent normal distributions.
         for sr, bexp, bsysin in zip(self.SR_names, self.SR_b, self.SR_b_sys):
             if self.cov is None or sr not in cov_order:
-                s = signal[sr]
+                s = pars['{0}::s'.format(sr)]
                 b = tf.constant(bexp,dtype=float)
                 bsys = tf.constant(bsysin,dtype=float)
                 bsys = tf.constant(bsysin,dtype=float)
@@ -101,101 +102,100 @@ class ColliderAnalysis:
          
                 # Nuisance parameters, use nominal null values (independent Gaussians to model background/control measurements)
                 # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
-                theta = nuispars[sr] * bsys
                 m_out = (s+b+theta < 0)
                 theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe") # Just for consistency with Poisson parameter
 
                 nuis0 = tfd.Normal(loc = theta_safe, scale = bsys) # I forget if bsys includes the Poisson uncertainty on b TODO: Check this!
-                tfds += [nuis0]
-                sample_layout += [(sr,"x",1)]
-                sample_count += 1
+                tfds["{0}::{1}::x".format(self.name,sr)] = nuis0
 
         if self.cov is not None:
             # Construct multivariate normal model for background/control measurements
             cov = tf.constant(self.cov,dtype=float)
             # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
-            theta_vec = tf.stack([nuispars[sr]*np.sqrt(self.cov[i][i]) for i,sr in enumerate(cov_order)],axis=-1) 
+            theta_vec = tf.stack([pars['{0}::theta'.format(sr)]*np.sqrt(self.cov[i][i]) for i,sr in enumerate(cov_order)],axis=-1) 
             #cov = tf.expand_dims(tf.constant(self.cov,dtype=float),0) # Need to match nuisance par shape (may be one for each of many signal hypotheses)
             #print("theta_vec.shape:",theta_vec.shape)
             #print("cov.shape:",cov.shape)
             cov_nuis = tfd.MultivariateNormalFullCovariance(loc=theta_vec,covariance_matrix=cov)
-            tfds += [cov_nuis]
-            sample_layout += [("cov","x",len(cov_order))]
-            sample_count += 1 # Still counts as one item, since these samples will all come packaged together in the sample list
+            tfds["{0}::cov_x".format(self.name)] = cov_nuis
 
-        return tfds, sample_layout, sample_count
+        return tfds #, sample_layout, sample_count
 
-    def tensorflow_null_model(self,signal):
-        # Make sure signal consists of constant tensorflow objects
-        sig = {sr: tf.constant(signal[sr], dtype=float) for sr in self.SR_names}
-        zeros = {sr: tf.constant([0]*len(signal[sr]), dtype=float) for sr in self.SR_names}
-        tfds, sample_layout, sample_count = self.tensorflow_model(sig,zeros)
-        # Get Asimov samples while we are at it
-        Asamples = self.get_Asimov_samples(sample_layout,signal)
-        return tfds, sample_layout, sample_count, Asamples
+    #def samples_to_dict(self,samples,sample_layout):
+    #    """Convert vector of samples into dictionary for easier usage"""
+    #    sample_dict = {}
+    #    i=0
+    #    for name, v, count in sample_layout:
+    #        if name=='cov':
+    #            if v!='x':
+    #                raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
+    #            for j,sr in enumerate(self.get_cov_order()):
+    #                if sr not in sample_dict: sample_dict[sr] = {}
+    #                sample_dict[sr]['x'] = samples[i][...,j]
+    #        else:
+    #            if name not in sample_dict: sample_dict[name] = {}
+    #            sample_dict[name][v] = samples[i]
+    #        i+=count
+    #    return sample_dict
 
-    def samples_to_dict(self,samples,sample_layout):
-        """Convert vector of samples into dictionary for easier usage"""
-        sample_dict = {}
-        i=0
-        for name, v, count in sample_layout:
-            if name=='cov':
-                if v!='x':
-                    raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
-                for j,sr in enumerate(self.get_cov_order()):
-                    if sr not in sample_dict: sample_dict[sr] = {}
-                    sample_dict[sr]['x'] = samples[i][...,j]
-            else:
-                if name not in sample_dict: sample_dict[name] = {}
-                sample_dict[name][v] = samples[i]
-            i+=count
-        return sample_dict
+    #def dict_to_samples(self,sample_dict,sample_layout):
+    #    """Convert dictionary of samples back into list for input
+    #    into a distribution object. Exact inverse of samples_to_dict"""
+    #    X = []
+    #    for name, v, count in sample_layout:
+    #        if name=='cov':
+    #            if v!='x':
+    #                raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
+    #            covlist = []
+    #            for j,sr in enumerate(self.get_cov_order()):
+    #                if sr not in sample_dict: 
+    #                    raise ValueError("Attempting to reconstruct sample vector from sample dictionary for analysis {0}, however samples for region {1} are missing!".format(self.name,sr))
+    #                covlist += [sample_dict[sr]['x']]
+    #            X += tf.stack(covlist,axis=-1) # Needs to be one big tensor for input to MultiVariateNormal
+    #        else:
+    #            if name not in sample_dict: sample_dict[name] = {}
+    #            X += [sample_dict[name][v]] # Not general, relies on count being 1. TODO: Should add check probably.
+    #    return X
 
-    def get_Asimov_samples(self,sample_layout,signal):
+    def get_Asimov_samples(self,signal_pars):
         """Construct 'Asimov' samples for this analysis
            Used to detemine asymptotic distribtuions of 
-           certain test statistics"""
+           certain test statistics.
 
-        # Need to manually set Asimov samples for the model according to the sample layout
-        Asamples = []        
-        name_to_index = {sr: i for i,sr in enumerate(self.SR_names)}
-        signal_len = len(signal[self.SR_names[0]]) # TODO: Should be the same for all SRs, could check this.
-        for name, v, count in sample_layout:
-            if name=='cov':
-                if v!='x':
-                    raise ValueError("Variable named {0} encounted while parsing sample_layout item 'cov'. This should only contain 'x' variables! Something is wrong.")
-                cov_order = self.get_cov_order()
-                Xsamp = np.zeros((signal_len,len(cov_order)))
-                for j,sr in enumerate(self.get_cov_order()):
-                    i = name_to_index[sr]
-                    Xsamp[:,j] = 0 * signal[sr]
-                Asamples += [Xsamp]
-            else:
-                i = name_to_index[name]
-                if v=='n':
-                    Asamples += [self.SR_b[i] + signal[name]] # signal region counts
-                elif v=='x':
-                    Asamples += [0 * signal[name]] # control measurements
-        return Asamples 
+           Assumes target MLE value for nuisance 
+           parameters is zero.
+        """
+        Asamples = {}
+        for i,sr in enumerate(self.SR_names):
+            Asamples["{0}::n".format(sr)] = self.SR_b[i] + signal_pars['{0}::s'.format(sr)]
+            Asamples["{0}::x".format(sr)] =            0 * signal_pars['{0}::s'.format(sr)]
+        return Asamples
 
-    def get_tensorflow_variables(self,samples,sample_layout,signal):
-        """Get parameters to be optimized, for input to "tensorflow_free_model"""
+    def get_nuisance_tensorflow_variables(self,sample_dict,signal):
+        """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
         # TODO: initial value (guess) for nuisance pars needs to be set carefully
-        sample_dict = self.samples_to_dict(samples,sample_layout)
         seeds = self.get_seeds_nuis(sample_dict,signal)
         thetas = {sr: tf.Variable(seeds[sr]['theta'], dtype=float, name='theta_{0}'.format(sr)) for sr in self.SR_names}
         return thetas
 
-    def tensorflow_free_model(self,signal,thetas):
-        """Output tensorflow input parameter tensors and probability objects for this analysis,
-           for optimisation/profiling relative to some simulated data
-           Input:
-              dictionary of signal parameter tensors to use
-        """
+    # def tensorflow_null_model(self,signal):
+    #      # Make sure signal consists of constant tensorflow objects
+    #      sig = {sr: tf.constant(signal[sr], dtype=float) for sr in self.SR_names}
+    #      zeros = {sr: tf.constant([0]*len(signal[sr]), dtype=float) for sr in self.SR_names}
+    #      tfds, sample_layout, sample_count = self.tensorflow_model(sig,zeros)
+    #      # Get Asimov samples while we are at it
+    #      Asamples = self.get_Asimov_samples(sample_layout,signal)
+    #      return tfds, sample_layout, sample_count, Asamples
 
-        sig = {sr: signal[sr] for sr in self.SR_names}
-        tfds, sample_layout, sample_count = self.tensorflow_model(sig,thetas)
-        return tfds, sample_layout, sample_count 
+    #  def tensorflow_free_model(self,signal,thetas):
+    #      """Output tensorflow input parameter tensors and probability objects for this analysis,
+    #         for optimisation/profiling relative to some simulated data
+    #         Input:
+    #            dictionary of signal and nuisance parameter tensors to use
+    #      """
+    #      sig = {sr: signal[sr] for sr in self.SR_names}
+    #      tfds, sample_layout, sample_count = self.tensorflow_model(sig,thetas)
+    #      return tfds, sample_layout, sample_count 
        
     def as_dict_short_form(self):
         """Add contents to dictionary, ready for dumping to YAML file
@@ -242,11 +242,12 @@ class ColliderAnalysis:
             df.loc[data[0]] = data[1:]
         return df
 
-    def get_seeds_nuis(self,samples,signal):
+    def get_seeds_nuis(self,samples,signal_pars):
         """Get seeds for (additive) nuisance parameter fits,
            assuming fixed signal parameters. Gives exact MLEs in
            the absence of correlations
            TODO: switch off fits for exactly fitted parameters?
+           TODO: Check that signal parameters are, in fact, fixed?
            """
         verbose = False # For debugging
         if verbose: print("signal (seeds_nuis):",signal)
@@ -261,7 +262,7 @@ class ColliderAnalysis:
             # From input
             n = samples[sr]['n'] 
             x = samples[sr]['x']
-            s = signal[sr]
+            s = signal_pars[sr]['s']
 
             #print("s:", s)
             #print("n:", n)
@@ -410,6 +411,51 @@ class ColliderAnalysis:
         #print("seeds:", seeds)
         #quit()
         return seeds
+
+class JMCJoint(tfd.JointDistributionNamed):
+    """Object to combine analyses together and treat them as a single
+       joint distribution. Uses JointDistributionNamed for some
+       underlying work.
+       
+       analyses - list of analysis-like objects to be combined
+       signal - dictionary of dictionaries containing signal parameter
+        or constant tensors for each analysis.
+       model_type - Specify treame
+    """
+   
+    def __init__(self, analyses, pars):
+        self.analyses = analyses
+        dists = {}
+        #self.layouts = []
+        #self.counts = []
+        self.Asamples = []
+        for a in analyses:
+            d = a.tensorflow_model(pars[a.name])
+            dists.update(d)
+            #self.layouts += [layout]
+            #self.counts += [count]
+            self.Asamples += a.get_Asimov_samples(pars[a.name])
+        print("dists:", dists)
+        super().__init__(dists)
+        self.dists = dists
+
+    #def sample(self,N):
+    #    """Rather than return samples as a list, as JointDistributionSequential does,
+    #       re-format them into a dictionary that is way easier to understand"""
+    #    X = self.joint_dist.sample(N)
+    #    Xdict = {}
+    #    i=0
+    #    for a,layout,count in zip(self.analyses,self.layouts,self.counts):
+    #        Xdict[a.name] = a.samples_to_dict(X[i:i+count],layout)
+    #    return Xdict
+
+    #def log_prob(self,sampledict):
+    #    """Convert sample dict back to list and evaluate PDF"""
+    #    X = []
+    #    for a, layout in zip(self.analyses,self.layouts):
+    #        X += a.dict_to_samples(sampledict[a.name],layout)
+    #    print("X:",X)
+    #    return self.joint_dist.log_prob(X) 
 
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
