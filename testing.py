@@ -20,9 +20,10 @@ analyses_read, SR_map = collider_analyses_from_long_YAML(stream,replace_SR_names
 #analyses = [analyses_read[1]] # For testing
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
 analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
+#analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_3b_discoverySR_24invfb"]
 stream.close()
 
-s_in = [1]
+s_in = [5.]
 nosignal = {a.name: {'{0}::s'.format(sr): tf.constant([0.],dtype=float) for sr in a.SR_names} for a in analyses}
 signal = {a.name: {'{0}::s'.format(sr): tf.constant(s_in,dtype=float) for sr in a.SR_names} for a in analyses}
 nullnuis = {a.name: {'nuisance': None} for a in analyses} # Use to automatically set nuisance parameters to zero for sample generation
