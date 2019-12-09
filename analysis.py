@@ -34,6 +34,10 @@ class ColliderAnalysis:
                 self.SR_b[i]     = sr[2]
                 self.SR_b_sys[i] = sr[3]
         if verify: self.verify() # Set this flag zero for "manual" data input
+        # Mega-simple bin-by-bin significance estimate, for cross-checking
+        print("Analysis {0}: significance per SR:".format(self.name))
+        for i,sr in enumerate(self.SR_names):
+            print("   {0}: {1:.1f}".format(sr, np.abs(self.SR_n[i] - self.SR_b[i])/np.sqrt(self.SR_b[i] + self.SR_b_sys[i]**2)))
 
     def get_cov_order(self):
         cov_order = None
@@ -114,6 +118,14 @@ class ColliderAnalysis:
             Asamples["{0}::{1}::n".format(self.name,sr)] = self.SR_b[i] + s
             Asamples["{0}::{1}::x".format(self.name,sr)] = 0*s             
         return Asamples
+
+    def get_observed_samples(self):
+        """Construct dictionary of observed data for this analysis"""
+        Osamples = {}
+        for i,sr in enumerate(self.SR_names):
+            Osamples["{0}::{1}::n".format(self.name,sr)] = self.SR_n[i]
+            Osamples["{0}::{1}::x".format(self.name,sr)] = 0             
+        return Osamples
 
     def get_nuisance_tensorflow_variables(self,sample_dict,signal):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
@@ -333,7 +345,7 @@ class ColliderAnalysis:
             nnans = np.sum(~np.isfinite(theta_MLE))
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
             seeds[sr]['theta'] = theta_MLE / bsys # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
-        #print("seeds:", seeds)
+        print("seeds:", seeds)
         #quit()
         return seeds
 
@@ -352,10 +364,12 @@ class JMCJoint(tfd.JointDistributionNamed):
         self.analyses = analyses
         dists = {}
         self.Asamples = {}
+        self.Osamples = {}
         for a in analyses:
             d = a.tensorflow_model(pars[a.name])
             dists.update(d)
             self.Asamples.update(a.get_Asimov_samples(pars[a.name]))
+            self.Osamples.update(a.get_observed_samples())
         super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
         self.dists = dists
 
@@ -366,11 +380,13 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     #print("YAML loaded")
     analyses = []
     SR_name_translation = {}
+    inverse_translation = {}
     nextID=0
     for k,v in d.items():
         if replace_SR_names:
             # TensorFlow cannot handle some characters, so switch SR names to something simple
             SR_name_translation.update({"SR{0}".format(nextID+i): sr[0] for i,sr in enumerate(v["Signal regions"])})
+            inverse_translation.update({sr[0]: "SR{0}".format(nextID+i) for i,sr in enumerate(v["Signal regions"])})
             srs = [["SR{0}".format(nextID+i)]+sr[1:] for i,sr in enumerate(v["Signal regions"])]
             nextID += len(srs)
         else:
@@ -384,6 +400,6 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
         ucz = v["unlisted_corr_zero"]
         analyses += [ColliderAnalysis(k,srs,cov,cov_order,ucz)]
     if replace_SR_names:
-        return analyses, SR_name_translation
+        return analyses, SR_name_translation, inverse_translation
     else:
         return analyses

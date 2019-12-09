@@ -13,23 +13,36 @@ print("Starting...")
 # Load analysis metadata from YAML and construct helper ColliderAnalysis objects for it
 f = 'old_junk/CBit_analyses.yaml'
 stream = open(f, 'r')
-analyses_read, SR_map = collider_analyses_from_long_YAML(stream,replace_SR_names=True)
+analyses_read, SR_map, iSR_map = collider_analyses_from_long_YAML(stream,replace_SR_names=True)
 #print(analyses_read[16].name, SR_map["SR220"]); quit()
 #analyses = analyses_read[10:] # For testing
 #analyses = [analyses_read[16]] # For testing
 #analyses = [analyses_read[1]] # For testing
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
-analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
+#analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_3b_discoverySR_24invfb"]
+#analyses = [a for a in analyses_read if a.name=="TEST"]
+#analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_RJ3L_3Lep_36invfb"]
+analyses = analyses_read
 stream.close()
 
-s_in = [5.]
+s_in = [.5]
 nosignal = {a.name: {'{0}::s'.format(sr): tf.constant([0.],dtype=float) for sr in a.SR_names} for a in analyses}
 signal = {a.name: {'{0}::s'.format(sr): tf.constant(s_in,dtype=float) for sr in a.SR_names} for a in analyses}
 nullnuis = {a.name: {'nuisance': None} for a in analyses} # Use to automatically set nuisance parameters to zero for sample generation
 
-print(nosignal)
-print(nullnuis)
+# # ATLAS_13TeV_RJ3L_3Lep_36invfb
+# # best fit signal from MSSMEW analysis, for testing
+#srs = ["3LHIGH__i0", "3LINT__i1", "3LLOW__i2", "3LCOMP__i3"]
+#s = [0.2313686860130337, 0.5370300693697021, 3.6212383333783076, 3.268878683119926]
+# n = [2, 1, 20, 12] 
+#signal = {"ATLAS_13TeV_RJ3L_3Lep_36invfb": {'{0}::s'.format(iSR_map[sr]): tf.constant([si],dtype=float) for si,sr in zip(s,srs)}}
+# obs_data = {"ATLAS_13TeV_RJ3L_3Lep_36invfb::{0}::n".format(iSR_map[sr]): tf.constant([ni],dtype=float) for ni,sr in zip(n,srs)}
+# obs_data_x = {"ATLAS_13TeV_RJ3L_3Lep_36invfb::{0}::x".format(iSR_map[sr]): tf.constant([0],dtype=float) for sr in srs}
+# obs_data.update(obs_data_x)
+# 
+# print(nosignal)
+# print(nullnuis)
 
 def deep_merge(a, b):
     """
@@ -75,15 +88,61 @@ joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
 samplesAb = joint0.Asamples
 samplesAsb = joint0s.Asamples 
  
-# Evaluate distributions for Asimov datasets 
-qsbAsb = -2*(joint0s.log_prob(samplesAsb))
-qbAsb  = -2*(joint0.log_prob(samplesAsb))
-qAsb = qsbAsb - qbAsb
+# Get observed data
+obs_data = joint0.Osamples
 
-qsbAb = -2*(joint0s.log_prob(samplesAb))
+# Define loss function to be minimized
+# Use @tf.function decorator to compile target function into graph mode for faster evaluation
+# Takes a while to compile the graph at startup, but execution is quite a bit faster
+# Turn off for rapid testing, turn on for production.
+#@tf.function
+def glob_chi2(pars,data,signal=signal):
+    #print("pars:",pars)
+    #print("signal:",signal)
+    joint_s = JMCJoint(analyses,deep_merge(pars,signal))
+    q = -2*joint_s.log_prob(data)
+    #print("q:",q)
+    total_loss = tf.math.reduce_sum(q)
+    return total_loss, None, q
+
+# Get dictionary of tensorflow variables for input into optimizer
+#print("Flatten pars list:", list(flatten(pars)))
+
+opts = {"optimizer": "Adam",
+        "step": 0.3,
+        "tol": 0.01,
+        "grad_tol": 1e-4,
+        "max_it": 100,
+        "max_same": 5
+        }
+
+# Evaluate distributions for Asimov datasets, in case where we
+# know that the MLEs for those samples are the true parameters
+qsbAsb = -2*(joint0s.log_prob(samplesAsb))
 qbAb  = -2*(joint0.log_prob(samplesAb))
+print("qsbAsb:", qsbAsb)
+print("qbAb:", qbAb)
+
+# Fit distributions for Asimov datasets for the other half of each
+# likelihood ratio
+print("Fitting w.r.t Asimov samples")
+#pars_nosigAb = get_nuis_parameters(analyses,nosignal,samplesAb) # For testing can check these recover the correct parameters and q match the above
+#pars_sigAsb  = get_nuis_parameters(analyses,signal,samplesAsb)
+#none, qbAb    = mm.optimize(pars_nosigAb, mm.tools.func_partial(glob_chi2,data=samplesAb,signal=nosignal),**opts)
+#none, qsbAsb  = mm.optimize(pars_sigAsb,  mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=signal),**opts)
+#print("qsbAsb:", qsbAsb)
+#print("qbAb:", qbAb)
+#print("pars_nosigAb:", pars_nosigAsb)
+#print("pars_sigAb:", pars_sigAsb)
+pars_nosigAsb = get_nuis_parameters(analyses,nosignal,samplesAsb)
+pars_sigAb    = get_nuis_parameters(analyses,signal,samplesAb)
+none, qbAsb = mm.optimize(pars_nosigAsb, mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=nosignal),**opts)
+none, qsbAb = mm.optimize(pars_sigAb,    mm.tools.func_partial(glob_chi2,data=samplesAb,signal=signal),**opts)
+
+qAsb = qsbAsb - qbAsb
 qAb = qsbAb - qbAb
 
+print("qAsb:", qAsb)
 
 do_MC = True
 if do_MC:
@@ -93,32 +152,7 @@ if do_MC:
     
     # Generate signal pseudodata to be fitted
     samples0s = joint0s.sample(N)
-    
-    # Define loss function to be minimized
-    # Use @tf.function decorator to compile target function into graph mode for faster evaluation
-    # Takes a while to compile the graph at startup, but execution is quite a bit faster
-    # Turn off for rapid testing, turn on for production.
-    #@tf.function
-    def glob_chi2(pars,data,signal=signal):
-        #print("pars:",pars)
-        #print("signal:",signal)
-        joint_s = JMCJoint(analyses,deep_merge(pars,signal))
-        q = -2*joint_s.log_prob(data)
-        #print("q:",q)
-        total_loss = tf.math.reduce_sum(q)
-        return total_loss, None, q
-    
-    # Get dictionary of tensorflow variables for input into optimizer
-    #print("Flatten pars list:", list(flatten(pars)))
-    
-    opts = {"optimizer": "Adam",
-            "step": 0.3,
-            "tol": 0.1,
-            "grad_tol": 1e-4,
-            "max_it": 100,
-            "max_same": 5
-            }
-    
+        
     print("Fitting w.r.t background-only samples")
     pars_nosig = get_nuis_parameters(analyses,nosignal,samples0)
     pars_sig   = get_nuis_parameters(analyses,signal,samples0)
@@ -133,6 +167,14 @@ if do_MC:
     pars_sig_s, qsb_s   = mm.optimize(pars_sig_s,   mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal),**opts)    
     q_s = qsb_s - qb_s
 
+
+# Fit distributions for observed datasets
+print("Fitting w.r.t background-only samples")
+pars_nosigO = get_nuis_parameters(analyses,nosignal,obs_data)
+pars_sigO   = get_nuis_parameters(analyses,signal,obs_data)
+pars_nosigO, qbO = mm.optimize(pars_nosigO, mm.tools.func_partial(glob_chi2,data=obs_data,signal=nosignal),**opts)
+pars_sigO, qsbO  = mm.optimize(pars_sigO,   mm.tools.func_partial(glob_chi2,data=obs_data,signal=signal),**opts)
+qbO = qsbO - qbO
 
 nplots = len(s_in)
 fig = plt.figure(figsize=(12,4*nplots))
@@ -158,14 +200,22 @@ for i in range(nplots):
         sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
 
     # Compute and plot asymptotic distributions!
-    var_mu_sb = 1/tf.abs(qAsb[i]) 
-    var_mu_b  = 1/tf.abs(qAb[i]) 
 
-    Eq_sb = -1 / var_mu_sb
-    Eq_b  = 1 / var_mu_b
+    print("qAsb:", qAsb)
 
-    Vq_sb = 4 / var_mu_sb
-    Vq_b  = 4 / var_mu_b
+    var_mu_sb = 1./tf.abs(qAsb[i]) 
+    var_mu_b  = 1./tf.abs(qAb[i]) 
+
+    #    #var_mu = sign * 1. / LLRA
+    #    Eq = LLRA
+    #    Varq = sign * 4 * LLRA
+
+
+    Eq_sb = -1. / var_mu_sb
+    Eq_b  = 1. / var_mu_b
+
+    Vq_sb = 4. / var_mu_sb
+    Vq_b  = 4. / var_mu_b
 
     qsbx = Eq_sb + np.linspace(-5*np.sqrt(Vq_sb),5*np.sqrt(Vq_sb),1000)
     qbx  = Eq_b  + np.linspace(-5*np.sqrt(Vq_b), 5*np.sqrt(Vq_b), 1000)
@@ -174,12 +224,19 @@ for i in range(nplots):
     #qbx  = np.linspace(np.min(qb),np.max(qb),1000)
     qsby = tf.math.exp(tfd.Normal(loc=Eq_sb, scale=tf.sqrt(Vq_sb)).log_prob(qsbx)) 
     qby  = tf.math.exp(tfd.Normal(loc=Eq_b, scale=tf.sqrt(Vq_b)).log_prob(qbx)) 
-
+    
+    # Asymptotic p-value and significance for background-only hypothesis test
+    apval = tfd.Normal(0,1).cdf((qbO[i] - Eq_b) / np.sqrt(Vq_b))
+    asig = -tfd.Normal(0,1).quantile(apval)
+    
     sns.lineplot(qbx,qby,color='b',ax=ax1)
     sns.lineplot(qsbx,qsby,color='r',ax=ax1)
 
     sns.lineplot(qbx, qby,color='b',ax=ax2)
     sns.lineplot(qsbx,qsby,color='r',ax=ax2)
+
+    ax1.axvline(x=qbO,lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
+    ax2.axvline(x=qbO,lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
 
     ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
     ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
