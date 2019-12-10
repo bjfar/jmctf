@@ -33,11 +33,22 @@ class ColliderAnalysis:
                 self.SR_n[i]     = sr[1]
                 self.SR_b[i]     = sr[2]
                 self.SR_b_sys[i] = sr[3]
+        self.SR_n = np.array(self.SR_n)
+        self.SR_b = np.array(self.SR_b)
+        self.SR_b_sys = np.array(self.SR_b_sys)
+
+        # Covariance matrix selection and ordering
+        self.cov_order = self.get_cov_order()
+        if self.cov is not None:
+            self.in_cov = np.array([1 if sr in self.cov_order else 0 for sr in self.SR_names], dtype=np.bool)
+            self.covi = [self.SR_names.index(sr) for sr in self.cov_order]
+            self.cov_diag = [self.cov[k][k] for k in range(len(self.cov))]
+ 
         if verify: self.verify() # Set this flag zero for "manual" data input
         # Mega-simple bin-by-bin significance estimate, for cross-checking
-        print("Analysis {0}: significance per SR:".format(self.name))
-        for i,sr in enumerate(self.SR_names):
-            print("   {0}: {1:.1f}".format(sr, np.abs(self.SR_n[i] - self.SR_b[i])/np.sqrt(self.SR_b[i] + self.SR_b_sys[i]**2)))
+        #print("Analysis {0}: significance per SR:".format(self.name))
+        #for i,sr in enumerate(self.SR_names):
+        #    print("   {0}: {1:.1f}".format(sr, np.abs(self.SR_n[i] - self.SR_b[i])/np.sqrt(self.SR_b[i] + self.SR_b_sys[i]**2)))
 
     def get_cov_order(self):
         cov_order = None
@@ -69,38 +80,59 @@ class ColliderAnalysis:
         small = 1e-10
         #print("pars:",pars)
         tfds = {}
-        for sr, bexp, bsysin in zip(self.SR_names, self.SR_b, self.SR_b_sys):
-            s = pars['{0}::s'.format(sr)]
-            b = tf.constant(bexp,dtype=float)
-            bsys = tf.constant(bsysin,dtype=float)
-            if 'nuisance' in pars.keys() and pars['nuisance'] is None:
-                # trigger shortcut to set nuisance parameters to zero, for sample generation. 
-                pars['{0}::theta'.format(sr)] = tf.constant(0*s)
-            theta = pars['{0}::theta'.format(sr)] * bsys
 
-            # Check if we are wandering outside parameter boundaries
-            m_out = (s+b+theta < 0)
-            theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe")
-
-            # Poisson model
-            poises0  = tfd.Poisson(rate = s+b+theta_safe, interpolate_nondiscrete=True) # TODO: Asimov variance isn't matching if I add theta here. Doesn't make sense? Or I am compute Asimov data wrong...
-            tfds["{0}::{1}::n".format(self.name,sr)] = poises0
-
-            # Nuisance parameters without correlations
-            if self.cov is None or sr not in cov_order:
-                nuis0 = tfd.Normal(loc = theta_safe, scale = bsys)
-                tfds["{0}::{1}::x".format(self.name,sr)] = nuis0
-
+        # Determine which SRs participate in the covariance matrix
         if self.cov is not None:
-            # Construct multivariate normal model for background/control measurements
             cov = tf.constant(self.cov,dtype=float)
-            # Want to scale parameters so their 1 sigma fit width is about 1, to help out optimiser.
-            theta_vec = tf.stack([pars['{0}::theta'.format(sr)]*np.sqrt(self.cov[i][i]) for i,sr in enumerate(cov_order)],axis=-1) 
-            #cov = tf.expand_dims(tf.constant(self.cov,dtype=float),0) # Need to match nuisance par shape (may be one for each of many signal hypotheses)
-            #print("theta_vec.shape:",theta_vec.shape)
-            #print("cov.shape:",cov.shape)
-            cov_nuis = tfd.MultivariateNormalFullCovariance(loc=theta_vec,covariance_matrix=cov)
-            tfds["{0}::cov_x".format(self.name)] = cov_nuis
+            cov_diag = tf.constant([self.cov[k][k] for k in range(len(self.cov))])
+            # Select which systematic to use, depending on whether SR participates in the covariance matrix
+            bsys_tmp = [np.sqrt(self.cov_diag[cov_order.index(sr)]) if self.in_cov[i] else self.SR_b_sys[i] for i,sr in enumerate(self.SR_names)]
+        else:
+            bsys_tmp = self.SR_b_sys[:]
+
+        # Prepare input parameters
+        #print("pars:",pars)
+        s = pars['s']
+        b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list
+        bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=float),0)
+        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
+            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+            pars['theta'] = tf.constant(0*s)
+        theta = pars['theta'] * bsys
+
+        # Check if we are wandering outside parameter boundaries
+        m_out = (s+b+theta < 0)
+        theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe")
+
+        # Poisson model
+        poises0  = tfd.Poisson(rate = s+b+theta_safe)
+        # Treat SR batch dims as event dims
+        poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=1)
+        tfds["{0}::n".format(self.name)] = poises0i
+
+        # Multivariate background constraints
+        if self.cov is not None:
+            #print("theta_safe:",theta_safe)
+            #print("covi:",self.covi)
+            theta_cov = tf.gather(theta_safe,self.covi,axis=-1)
+            #print("theta_cov:",theta_cov)
+            cov_nuis = tfd.MultivariateNormalFullCovariance(loc=theta_cov,covariance_matrix=cov)
+            tfds["{0}::x_cov".format(self.name)] = cov_nuis
+            #print("str(cov_nuis):", str(cov_nuis))
+
+            # Remaining uncorrelated background constraints
+            if np.sum(~self.in_cov)>0:
+                nuis0 = tfd.Normal(loc = theta_safe[...,~self.in_cov], scale = bsys[...,~self.in_cov])
+                # Treat SR batch dims as event dims
+                nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
+                tfds["{0}::x_nocov".format(self.name)] = nuis0i
+        else:
+            # Only have uncorrelated background constraints
+            nuis0 = tfd.Normal(loc = theta_safe, scale = bsys)
+            # Treat SR batch dims as event dims
+            nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
+            tfds["{0}::x".format(self.name)] = nuis0i 
+        #print("hello3")
 
         return tfds #, sample_layout, sample_count
 
@@ -113,25 +145,37 @@ class ColliderAnalysis:
            parameters is zero.
         """
         Asamples = {}
-        for i,sr in enumerate(self.SR_names):
-            s = signal_pars['{1}::s'.format(self.name,sr)]
-            Asamples["{0}::{1}::n".format(self.name,sr)] = self.SR_b[i] + s
-            Asamples["{0}::{1}::x".format(self.name,sr)] = 0*s             
+        s = signal_pars['s']
+        b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list 
+        #print("s:",s)
+        #print("self.in_cov:", self.in_cov)
+        Asamples["{0}::n".format(self.name)] = tf.expand_dims(b + s,0) # Expand to sample dimension size 1
+        if self.cov is not None:
+            Asamples["{0}::x_cov".format(self.name)] = tf.constant(np.zeros((1,s.shape[0],np.sum(self.in_cov))),dtype=float)
+            if np.sum(~self.in_cov)>0:
+                Asamples["{0}::x_nocov".format(self.name)] = tf.constant(np.zeros((1,s.shape[0],np.sum(~self.in_cov))),dtype=float)
+        else:
+            Asamples["{0}::x".format(self.name)] = tf.expand_dims(0*s,0)
+        #print("{0}: Asamples: {1}".format(self.name, Asamples))
         return Asamples
 
     def get_observed_samples(self):
         """Construct dictionary of observed data for this analysis"""
         Osamples = {}
-        for i,sr in enumerate(self.SR_names):
-            Osamples["{0}::{1}::n".format(self.name,sr)] = self.SR_n[i]
-            Osamples["{0}::{1}::x".format(self.name,sr)] = 0             
+        Osamples["{0}::n".format(self.name)] = tf.expand_dims(tf.expand_dims(tf.constant(self.SR_n,dtype=float),0),0)
+        if self.cov is not None:
+            Osamples["{0}::x_cov".format(self.name)] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(self.in_cov),dtype=float),0),0)
+            if np.sum(~self.in_cov)>0:
+                Osamples["{0}::x_nocov".format(self.name)] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(~self.in_cov),dtype=float),0),0)
+        else:
+            Osamples["{0}::x".format(self.name)] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=float),0),0)
         return Osamples
 
     def get_nuisance_tensorflow_variables(self,sample_dict,signal):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
-        # TODO: initial value (guess) for nuisance pars needs to be set carefully
-        seeds = self.get_seeds_nuis(sample_dict,signal)
-        thetas = {"{0}::theta".format(sr): tf.Variable(seeds[sr]['theta'], dtype=float, name='theta_{0}'.format(sr)) for sr in self.SR_names}
+        seeds = self.get_seeds_nuis(sample_dict,signal) # Get initial guesses for nuisance parameter MLEs
+        stacked_seeds = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
+        thetas = {"theta": tf.Variable(stacked_seeds, dtype=float, name='theta')}
         return thetas
        
     def as_dict_short_form(self):
@@ -194,12 +238,33 @@ class ColliderAnalysis:
 
         threshold = 1e-2 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
 
+        n_all = samples['{0}::n'.format(self.name)]
+        if self.cov is not None:
+            xcov_all = samples['{0}::x_cov'.format(self.name)]
+            if np.sum(~self.in_cov)>0:
+                xnocov_all = samples['{0}::x_nocov'.format(self.name)]
+        else:
+            x_all = samples['{0}::x'.format(self.name)]
+        s_all = signal_pars['s']
+
+        #print("s_all:", s_all)
+        #print("n_all:", n_all)
+        #print("x_all:", x_all)
+
+        # TODO: Could perhaps do all SRs at once, but that's a bit of a pain and this is fast enough anyway
         for i,sr in enumerate(self.SR_names): 
+            #print("Getting seeds for analysis {0}, region {1}".format(self.name,sr))
             seeds[sr] = {}
             # From input
-            n = samples['{0}::{1}::n'.format(self.name,sr)] 
-            x = samples['{0}::{1}::x'.format(self.name,sr)]
-            s = signal_pars['{0}::s'.format(sr)]
+            n = n_all[...,i] 
+            if self.cov is not None:
+                if sr in self.cov_order:
+                    x = xcov_all[...,i]
+                else:
+                    x = xnocov_all[...,i]
+            else:
+                x = x_all[...,i]
+            s = s_all[...,i]
 
             #print("s:", s)
             #print("n:", n)
@@ -207,8 +272,11 @@ class ColliderAnalysis:
 
             # From object member variables
             b = tf.constant(self.SR_b[i],dtype=float)
-
             bsys = tf.constant(self.SR_b_sys[i],dtype=float)
+
+            #print("s:", s)
+            #print("b:", b)
+            #print("x:", x)            
 
             # Math!
             A = 1./bsys**2
@@ -236,7 +304,10 @@ class ColliderAnalysis:
             if verbose: print("No solution count:", np.sum(D<0))
             #elif D==0:
             # One real solution:
-            #print(B)
+            #print("B:",B)
+            #print("A:",A)
+            #print("D:",D)
+            #print("bcast.shape:", bcast.shape)
             theta_MLE[D==0] = -B[D==0]/(2*A) # Is this always positive? Not sure...
             if verbose: print("Single solution count:", np.sum(D==0))
             #elif D>0:
@@ -345,7 +416,7 @@ class ColliderAnalysis:
             nnans = np.sum(~np.isfinite(theta_MLE))
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
             seeds[sr]['theta'] = theta_MLE / bsys # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
-        print("seeds:", seeds)
+        #print("seeds:", seeds)
         #quit()
         return seeds
 
