@@ -21,18 +21,20 @@ analyses_read, SR_map, iSR_map = collider_analyses_from_long_YAML(stream,replace
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2OSLEP_36invfb"] # For testing
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_3b_discoverySR_24invfb"]
-#analyses = [a for a in analyses_read if a.name=="TEST"]
+#analyses_read = {name: a for name,a in analyses_read.items() if a.name=="TEST"}
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_RJ3L_3Lep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2LEPsoft_36invfb"]
-analyses = analyses_read
+analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_8TeV_MultiLEP_3Lep_20invfb"}
+#analyses = analyses_read
 stream.close()
 
 s_in = [.5,1.]
-nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses}
-signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses}
-nullnuis = {a.name: {'nuisance': None} for a in analyses} # Use to automatically set nuisance parameters to zero for sample generation
+#s_in = [1.,10.]
+nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
+signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
+nullnuis = {a.name: {'nuisance': None} for a in analyses_read.values()} # Use to automatically set nuisance parameters to zero for sample generation
 
-# # ATLAS_13TeV_RJ3L_3Lep_36invfb
+# ATLAS_13TeV_RJ3L_3Lep_36invfb
 # # best fit signal from MSSMEW analysis, for testing
 srs = ["3LHIGH__i0", "3LINT__i1", "3LLOW__i2", "3LCOMP__i3"]
 s = [0.2313686860130337, 0.5370300693697021, 3.6212383333783076, 3.268878683119926]
@@ -74,193 +76,256 @@ def deep_merge(a, b):
             for key in keys
         }
 
-def get_nuis_parameters(analyses,signal,samples):
-    """Samples vector and signal provided to compute good starting guesses for parameters"""
-    pars = {}
-    for a in analyses:
-        pars[a.name] = a.get_nuisance_tensorflow_variables(samples,signal[a.name])
-    return pars
+def glob_chi2(pars,analyses,data,pre_scaled_pars):
+        joint_s = JMCJoint(analyses,pars,pre_scaled_pars)
+        q = -2*joint_s.log_prob(data)
+        total_loss = tf.math.reduce_sum(q)
+        return total_loss, None, q
 
-# Create joint distributions
-joint0  = JMCJoint(analyses,deep_merge(nosignal,nullnuis))
-joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
+def optimize(pars,*args,**kwargs):
+    """Wrapper for optimizer step that skips it if the initial guesses are known
+       to be exact MLEs"""
 
-# Get Asimov samples for nuisance MLEs with fixed signal hypotheses
-samplesAb = joint0.Asamples
-samplesAsb = joint0s.Asamples 
- 
-# Get observed data
-obs_data = joint0.Osamples
+    opts = {"optimizer": "Adam",
+            "step": 0.3,
+            "tol": 0.01,
+            "grad_tol": 1e-4,
+            "max_it": 100,
+            "max_same": 5
+            }
 
-# Define loss function to be minimized
-# Use @tf.function decorator to compile target function into graph mode for faster evaluation
-# Takes a while to compile the graph at startup, but execution is quite a bit faster
-# Turn off for rapid testing, turn on for production.
+    exact_MLEs = True
+    for a in analyses.values():
+        if a.cov is not None: exact_MLEs = False
+    if exact_MLEs:
+        print("All starting MLE guesses are exact: skipping optimisation") 
+        loss, none, q = glob_chi2(pars,*args,**kwargs)
+    else:
+        print("Beginning optimisation")
+        f = tf.function(mm.tools.func_partial(glob_chi2,*args,**kwargs))
+        none, q = mm.optimize(pars, f, **opts)
+    return q
 
-def glob_chi2(pars,data,signal):
-    #print("pars:",pars)
-    #print("signal:",signal)
-    joint_s = JMCJoint(analyses,deep_merge(pars,signal))
-    #print("str(d):", str(joint_s))
-    #print("data:",data)
-    q = -2*joint_s.log_prob(data)
-    #print("q:",q)
-    total_loss = tf.math.reduce_sum(q)
-    return total_loss, None, q
-
-# Get dictionary of tensorflow variables for input into optimizer
-#print("Flatten pars list:", list(flatten(pars)))
-
-opts = {"optimizer": "Adam",
-        "step": 0.3,
-        "tol": 0.01,
-        "grad_tol": 1e-4,
-        "max_it": 100,
-        "max_same": 5
-        }
-
-#samples0 = joint0.sample(N)
-#samples0s = joint0s.sample(N)
-#print("samples0:", samples0)
-#print("samples0s:", samples0s)
-#print("samplesAsb:",samplesAsb)
-#quit()
-
-# Evaluate distributions for Asimov datasets, in case where we
-# know that the MLEs for those samples are the true parameters
-qsbAsb = -2*(joint0s.log_prob(samplesAsb))
-qbAb  = -2*(joint0.log_prob(samplesAb))
-#print("qsbAsb:", qsbAsb)
-#print("qbAb:", qbAb)
-
-# Fit distributions for Asimov datasets for the other half of each
-# likelihood ratio
-print("Fitting w.r.t Asimov samples")
-#pars_nosigAb = get_nuis_parameters(analyses,nosignal,samplesAb) # For testing can check these recover the correct parameters and q match the above
-#pars_sigAsb  = get_nuis_parameters(analyses,signal,samplesAsb)
-#none, qbAb    = mm.optimize(pars_nosigAb, mm.tools.func_partial(glob_chi2,data=samplesAb,signal=nosignal),**opts)
-#none, qsbAsb  = mm.optimize(pars_sigAsb,  mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=signal),**opts)
-#print("qsbAsb:", qsbAsb)
-#print("qbAb:", qbAb)
-#print("pars_nosigAb:", pars_nosigAsb)
-#print("pars_sigAb:", pars_sigAsb)
-pars_nosigAsb = get_nuis_parameters(analyses,nosignal,samplesAsb)
-pars_sigAb    = get_nuis_parameters(analyses,signal,samplesAb)
-none, qbAsb = mm.optimize(pars_nosigAsb, mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=nosignal),**opts)
-none, qsbAb = mm.optimize(pars_sigAb,    mm.tools.func_partial(glob_chi2,data=samplesAb,signal=signal),**opts)
-
-qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
-qAb = (qsbAb - qbAb)[0]
-
-#print("qAsb:", qAsb)
-
-do_MC = True
-if do_MC:
-
-    # Generate background-only pseudodata to be fitted
-    samples0 = joint0.sample(N)
+# mu=1 vs mu=0 tests
+do_mu_tests=True
+if do_mu_tests:
+    for a in analyses_read.values():
+        print("Simulating analysis {0}".format(a.name))
+        analyses = {a.name: a}
     
-    #print("sapmlesAsb:",samplesAsb)
-    #print("samples0:", samples0)
-    #print("obs_data:", obs_data)
-    #quit()
-    # Generate signal pseudodata to be fitted
-    samples0s = joint0s.sample(N)
+        # Create joint distributions
+        joint0  = JMCJoint(analyses,deep_merge(nosignal,nullnuis))
+        joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
         
-    print("Fitting w.r.t background-only samples")
-    pars_nosig = get_nuis_parameters(analyses,nosignal,samples0)
-    pars_sig   = get_nuis_parameters(analyses,signal,samples0)
-    fsb = tf.function(mm.tools.func_partial(glob_chi2,data=samples0,signal=nosignal))
-    fb  = tf.function(mm.tools.func_partial(glob_chi2,data=samples0,signal=signal))
-    pars_nosig, qb = mm.optimize(pars_nosig, fsb, **opts)
-    pars_sig, qsb  = mm.optimize(pars_sig,   fb,  **opts)
-    q = qsb - qb
-
-    print("Fitting w.r.t signal samples")
-    pars_nosig_s  = get_nuis_parameters(analyses,nosignal,samples0s)
-    pars_sig_s    = get_nuis_parameters(analyses,signal,samples0s)
-    fsb_s = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=nosignal))
-    fb_s  = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal))
-    pars_nosig_s, qb_s  = mm.optimize(pars_nosig_s, fsb_s, **opts)
-    pars_sig_s, qsb_s   = mm.optimize(pars_sig_s,   fb_s,  **opts)    
-    q_s = qsb_s - qb_s
-
-
-# Fit distributions for observed datasets
-print("Fitting w.r.t background-only samples")
-pars_nosigO = get_nuis_parameters(analyses,nosignal,obs_data)
-pars_sigO   = get_nuis_parameters(analyses,signal,obs_data)
-pars_nosigO, qbO = mm.optimize(pars_nosigO, mm.tools.func_partial(glob_chi2,data=obs_data,signal=nosignal),**opts)
-pars_sigO, qsbO  = mm.optimize(pars_sigO,   mm.tools.func_partial(glob_chi2,data=obs_data,signal=signal),**opts)
-qO = (qsbO - qbO)[0] # extract single sample result
-#print("qO:",qO)
-
-nplots = len(s_in)
-fig = plt.figure(figsize=(12,4*nplots))
-for i in range(nplots):
-    ax1 = fig.add_subplot(nplots,2,2*i+1)
-    ax2 = fig.add_subplot(nplots,2,2*i+2)
-    ax2.set(yscale="log")
-
-    if do_MC:
-        qb  = q[:,i].numpy()
-        qsb = q_s[:,i].numpy()
-        if np.sum(np.isfinite(qb)) < 2:
-            print("qb mostly nan!")
-        if np.sum(np.isfinite(qsb)) < 2:
-            print("qsb mostly nan!")
-        qb = qb[np.isfinite(qb)]
-        qsb = qsb[np.isfinite(qsb)]
-
-        sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
-        sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
-
-        sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
-        sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
-
-    # Compute and plot asymptotic distributions!
-
-    var_mu_sb = 1./tf.abs(qAsb[i]) 
-    var_mu_b  = 1./tf.abs(qAb[i]) 
-
-    #    #var_mu = sign * 1. / LLRA
-    #    Eq = LLRA
-    #    Varq = sign * 4 * LLRA
-
-
-    Eq_sb = -1. / var_mu_sb
-    Eq_b  = 1. / var_mu_b
-
-    Vq_sb = 4. / var_mu_sb
-    Vq_b  = 4. / var_mu_b
-
-    qsbx = Eq_sb + np.linspace(-5*np.sqrt(Vq_sb),5*np.sqrt(Vq_sb),1000)
-    qbx  = Eq_b  + np.linspace(-5*np.sqrt(Vq_b), 5*np.sqrt(Vq_b), 1000)
-
-    #qsbx = np.linspace(np.min(qsb),np.max(qsb),1000)
-    #qbx  = np.linspace(np.min(qb),np.max(qb),1000)
-    qsby = tf.math.exp(tfd.Normal(loc=Eq_sb, scale=tf.sqrt(Vq_sb)).log_prob(qsbx)) 
-    qby  = tf.math.exp(tfd.Normal(loc=Eq_b, scale=tf.sqrt(Vq_b)).log_prob(qbx)) 
+        # Get Asimov samples for nuisance MLEs with fixed signal hypotheses
+        samplesAb = joint0.Asamples
+        samplesAsb = joint0s.Asamples 
+        print("sapmlesAsb:",samplesAsb)
+        print("sapmlesAb:",samplesAb)
+ 
+        # Get observed data
+        obs_data = joint0.Osamples
+        
+        # Evaluate distributions for Asimov datasets, in case where we
+        # know that the MLEs for those samples are the true parameters
+        qsbAsb = -2*(joint0s.log_prob(samplesAsb))
+        qbAb  = -2*(joint0.log_prob(samplesAb))
+        print("qsbAsb:", qsbAsb)
+        print("qbAb:", qbAb)
+        
+        # Fit distributions for Asimov datasets for the other half of each
+        # likelihood ratio
+        print("Fitting w.r.t Asimov samples")
+        #pars_nosigAb = get_nuis_parameters(analyses,nosignal,samplesAb) # For testing can check these recover the correct parameters and q match the above
+        #pars_sigAsb  = get_nuis_parameters(analyses,signal,samplesAsb)
+        #none, qbAb    = mm.optimize(pars_nosigAb, mm.tools.func_partial(glob_chi2,data=samplesAb,signal=nosignal),**opts)
+        #none, qsbAsb  = mm.optimize(pars_sigAsb,  mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=signal),**opts)
+        #print("qsbAsb:", qsbAsb)
+        #print("qbAb:", qbAb)
+        #print("pars_nosigAb:", pars_nosigAsb)
+        #print("pars_sigAb:", pars_sigAsb)
+        pars_nosigAsb = joint0.get_nuis_parameters(nosignal,samplesAsb)
+        pars_sigAb    = joint0.get_nuis_parameters(signal,samplesAb)
+        #none, qbAsb = mm.optimize(pars_nosigAsb, mm.tools.func_partial(glob_chi2,data=samplesAsb,signal=nosignal),**opts)
+        #none, qsbAb = mm.optimize(pars_sigAb,    mm.tools.func_partial(glob_chi2,data=samplesAb,signal=signal),**opts)
+        qbAsb = optimize(deep_merge(pars_nosigAsb,nosignal),analyses,samplesAsb,pre_scaled_pars='nuis')
+        qsbAb = optimize(deep_merge(pars_sigAb   ,signal),  analyses,samplesAb ,pre_scaled_pars='nuis')
     
-    # Asymptotic p-value and significance for background-only hypothesis test
-    apval = tfd.Normal(0,1).cdf((qO[i] - Eq_b) / np.sqrt(Vq_b))
-    asig = -tfd.Normal(0,1).quantile(apval)
+        qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
+        qAb = (qsbAb - qbAb)[0]
+        
+        #print("qAsb:", qAsb)
+        
+        do_MC = True
+        if do_MC:
+        
+            # Generate background-only pseudodata to be fitted
+            samples0 = joint0.sample(N)
+            
+            #print("sapmlesAsb:",samplesAsb)
+            #print("samples0:", samples0)
+            #print("obs_data:", obs_data)
+            #quit()
+            # Generate signal pseudodata to be fitted
+            samples0s = joint0s.sample(N)
+                
+            print("Fitting w.r.t background-only samples")
+            pars_nosig = joint0.get_nuis_parameters(nosignal,samples0)
+            pars_sig   = joint0.get_nuis_parameters(signal,samples0)
+            # fsb = tf.function(mm.tools.func_partial(glob_chi2,data=samples0,signal=nosignal))
+            # fb  = tf.function(mm.tools.func_partial(glob_chi2,data=samples0,signal=signal))
+            # pars_nosig, qb = mm.optimize(pars_nosig, fsb, **opts) ?? are these right?
+            # pars_sig, qsb  = mm.optimize(pars_sig,   fb,  **opts) ??
+            qb  = optimize(deep_merge(pars_nosig,nosignal),analyses,samples0,pre_scaled_pars='nuis')
+            qsb = optimize(deep_merge(pars_sig  ,signal),  analyses,samples0,pre_scaled_pars='nuis')
     
-    sns.lineplot(qbx,qby,color='b',ax=ax1)
-    sns.lineplot(qsbx,qsby,color='r',ax=ax1)
+            q = qsb - qb
+        
+            print("Fitting w.r.t signal samples")
+            pars_nosig_s  = joint0.get_nuis_parameters(nosignal,samples0s)
+            pars_sig_s    = joint0.get_nuis_parameters(signal,samples0s)
+            # fsb_s = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=nosignal))
+            # fb_s  = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal))
+            # pars_nosig_s, qb_s  = mm.optimize(pars_nosig_s, fsb_s, **opts)
+            # pars_sig_s, qsb_s   = mm.optimize(pars_sig_s,   fb_s,  **opts)    
+            qb_s  = optimize(deep_merge(pars_nosig_s,nosignal),analyses,samples0s,pre_scaled_pars='nuis')
+            qsb_s = optimize(deep_merge(pars_sig_s  ,signal),  analyses,samples0s,pre_scaled_pars='nuis')
+    
+            q_s = qsb_s - qb_s
+        
+        
+        # Fit distributions for observed datasets
+        print("Fitting w.r.t background-only samples")
+        pars_nosigO = joint0.get_nuis_parameters(nosignal,obs_data)
+        pars_sigO   = joint0.get_nuis_parameters(signal,obs_data)
+        #pars_nosigO, qbO = mm.optimize(pars_nosigO, mm.tools.func_partial(glob_chi2,data=obs_data,signal=nosignal),**opts)
+        #pars_sigO, qsbO  = mm.optimize(pars_sigO,   mm.tools.func_partial(glob_chi2,data=obs_data,signal=signal),**opts)
+        qbO  = optimize(deep_merge(pars_nosigO,nosignal),analyses,obs_data,pre_scaled_pars='nuis')
+        qsbO = optimize(deep_merge(pars_sigO  ,signal),  analyses,obs_data,pre_scaled_pars='nuis')
+        qO = (qsbO - qbO)[0] # extract single sample result
+        #print("qO:",qO)
+        
+        nplots = len(s_in)
+        fig = plt.figure(figsize=(12,4*nplots))
+        for i in range(nplots):
+            ax1 = fig.add_subplot(nplots,2,2*i+1)
+            ax2 = fig.add_subplot(nplots,2,2*i+2)
+            ax2.set(yscale="log")
+        
+            if do_MC:
+                qb  = q[:,i].numpy()
+                qsb = q_s[:,i].numpy()
+                if np.sum(np.isfinite(qb)) < 2:
+                    print("qb mostly nan!")
+                if np.sum(np.isfinite(qsb)) < 2:
+                    print("qsb mostly nan!")
+                qb = qb[np.isfinite(qb)]
+                qsb = qsb[np.isfinite(qsb)]
+        
+                sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+        
+                sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+        
+            # Compute and plot asymptotic distributions!
+        
+            var_mu_sb = 1./tf.abs(qAsb[i]) 
+            var_mu_b  = 1./tf.abs(qAb[i]) 
+        
+            #    #var_mu = sign * 1. / LLRA
+            #    Eq = LLRA
+            #    Varq = sign * 4 * LLRA
+        
+        
+            Eq_sb = -1. / var_mu_sb
+            Eq_b  = 1. / var_mu_b
+        
+            Vq_sb = 4. / var_mu_sb
+            Vq_b  = 4. / var_mu_b
+        
+            qsbx = Eq_sb + np.linspace(-5*np.sqrt(Vq_sb),5*np.sqrt(Vq_sb),1000)
+            qbx  = Eq_b  + np.linspace(-5*np.sqrt(Vq_b), 5*np.sqrt(Vq_b), 1000)
+        
+            #qsbx = np.linspace(np.min(qsb),np.max(qsb),1000)
+            #qbx  = np.linspace(np.min(qb),np.max(qb),1000)
+            qsby = tf.math.exp(tfd.Normal(loc=Eq_sb, scale=tf.sqrt(Vq_sb)).log_prob(qsbx)) 
+            qby  = tf.math.exp(tfd.Normal(loc=Eq_b, scale=tf.sqrt(Vq_b)).log_prob(qbx)) 
+            
+            # Asymptotic p-value and significance for background-only hypothesis test
+            apval = tfd.Normal(0,1).cdf(np.abs(qO[i] - Eq_b) / np.sqrt(Vq_b))
+            asig = -tfd.Normal(0,1).quantile(apval)
+            
+            sns.lineplot(qbx,qby,color='b',ax=ax1)
+            sns.lineplot(qsbx,qsby,color='r',ax=ax1)
+        
+            sns.lineplot(qbx, qby,color='b',ax=ax2)
+            sns.lineplot(qsbx,qsby,color='r',ax=ax2)
+        
+            #print("qO[{0}]: {1}".format(i,qO[i]))
+        
+            ax1.axvline(x=qO.numpy()[i],lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
+            ax2.axvline(x=qO.numpy()[i],lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
+        
+            ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+            ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+        
+        plt.tight_layout()
+        fig.savefig("qsb_dists_{0}.png".format(a.name))
 
-    sns.lineplot(qbx, qby,color='b',ax=ax2)
-    sns.lineplot(qsbx,qsby,color='r',ax=ax2)
+# GOF tests
+do_gof_tests=False
+if do_gof_tests:
+    print("Performing GOF tests")
+    for a in analyses_read.values():
+        print("Simulating analysis {0}".format(a.name))
+        analyses = [a]
+    
+        # Create joint distributions
+        joint0  = JMCJoint(analyses,deep_merge(nosignal,nullnuis))
+        joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
 
-    print("qO[{0}]: {1}".format(i,qO[i]))
-
-    ax1.axvline(x=qO.numpy()[i],lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
-    ax2.axvline(x=qO.numpy()[i],lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
-
-    ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
-    ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
-
-plt.tight_layout()
-fig.savefig("qsb_dists.png")
-
-
+        do_MC = True
+        if do_MC:
+        
+            # Generate background-only pseudodata to be fitted
+            samples0 = joint0.sample(N)
+            
+            # Generate signal pseudodata to be fitted
+            samples0s = joint0s.sample(N)
+                
+            print("Fitting w.r.t background-only samples")
+            pars_nosig = joint0.get_all_parameters(samples0)
+            pars_sig   = joint0.get_all_parameters(samples0)
+            qb  = optimize(pars_nosig,analyses,samples0,nosignal,pre_scaled_pars='all')
+            qsb = optimize(pars_sig,  analyses,samples0,signal,pre_scaled_pars='all')
+            pars_nosig = joint0.get_nuis_parameters(nosignal,samples0)
+            pars_sig   = joint0.get_nuis_parameters(signal,samples0)
+            qb  = optimize(pars_nosig,analyses,samples0,nosignal,pre_scaled_pars='all')
+            qsb = optimize(pars_sig,  analyses,samples0,signal,pre_scaled_pars='all')
+     
+            q = qsb - qb
+        
+            print("Fitting w.r.t signal samples")
+            pars_nosig_s  = joint0.get_nuis_parameters(nosignal,samples0s)
+            pars_sig_s    = joint0.get_nuis_parameters(signal,samples0s)
+            # fsb_s = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=nosignal))
+            # fb_s  = tf.function(mm.tools.func_partial(glob_chi2,data=samples0s,signal=signal))
+            # pars_nosig_s, qb_s  = mm.optimize(pars_nosig_s, fsb_s, **opts)
+            # pars_sig_s, qsb_s   = mm.optimize(pars_sig_s,   fb_s,  **opts)    
+            qb_s  = optimize(pars_nosig_s,analyses,samples0s,nosignal,pre_scaled_pars='all')
+            qsb_s = optimize(pars_sig_s,  analyses,samples0s,signal,pre_scaled_pars='all')
+    
+            q_s = qsb_s - qb_s
+        
+        
+        # Fit distributions for observed datasets
+        print("Fitting w.r.t background-only samples")
+        pars_nosigO = joint0.get_nuis_parameters(nosignal,obs_data)
+        pars_sigO   = joint0.get_nuis_parameters(signal,obs_data)
+        #pars_nosigO, qbO = mm.optimize(pars_nosigO, mm.tools.func_partial(glob_chi2,data=obs_data,signal=nosignal),**opts)
+        #pars_sigO, qsbO  = mm.optimize(pars_sigO,   mm.tools.func_partial(glob_chi2,data=obs_data,signal=signal),**opts)
+        qbO  = optimize(pars_nosigO,analyses,obs_data,nosignal)
+        qsbO = optimize(pars_sigO,analyses,obs_data,signal)
+        qO = (qsbO - qbO)[0] # extract single sample result
+ 

@@ -36,6 +36,10 @@ class ColliderAnalysis:
         self.SR_n = np.array(self.SR_n)
         self.SR_b = np.array(self.SR_b)
         self.SR_b_sys = np.array(self.SR_b_sys)
+ 
+        # Scaling factors to scale canonical input parameters to parameters with ~variance=1 MLEs
+        self.s_scaling = np.sqrt(self.SR_b + self.SR_b_sys**2)
+        self.theta_scaling = self.SR_b_sys
 
         # Covariance matrix selection and ordering
         self.cov_order = self.get_cov_order()
@@ -46,9 +50,9 @@ class ColliderAnalysis:
  
         if verify: self.verify() # Set this flag zero for "manual" data input
         # Mega-simple bin-by-bin significance estimate, for cross-checking
-        #print("Analysis {0}: significance per SR:".format(self.name))
-        #for i,sr in enumerate(self.SR_names):
-        #    print("   {0}: {1:.1f}".format(sr, np.abs(self.SR_n[i] - self.SR_b[i])/np.sqrt(self.SR_b[i] + self.SR_b_sys[i]**2)))
+        # print("Analysis {0}: significance per SR:".format(self.name))
+        # for i,sr in enumerate(self.SR_names):
+        #     print("   {0}: {1:.1f}".format(sr, np.abs(self.SR_n[i] - self.SR_b[i])/np.sqrt(self.SR_b[i] + self.SR_b_sys[i]**2)))
 
     def get_cov_order(self):
         cov_order = None
@@ -71,7 +75,9 @@ class ColliderAnalysis:
 
     def tensorflow_model(self,pars):
         """Output tensorflow probability model object, to be combined together and
-           sampled from. Signal parameters should all be fixed."""
+           sampled from.
+           pars       - dictionary of signal and nuisance parameters (tensors, constant or Variable)
+        """
 
         # Need to construct these shapes to match the event_shape, batch_shape, sample_shape 
         # semantics of tensorflow_probability.
@@ -91,18 +97,17 @@ class ColliderAnalysis:
             bsys_tmp = self.SR_b_sys[:]
 
         # Prepare input parameters
-        #print("pars:",pars)
-        s = pars['s']
+        #print("input pars:",pars)
         b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list
         bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=float),0)
-        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
-            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
-            pars['theta'] = tf.constant(0*s)
-        theta = pars['theta'] * bsys
-
+        s = pars['s'] * self.s_scaling # We "scan" normalised versions of s, to help optimizer
+        theta = pars['theta'] * self.theta_scaling # We "scan" normalised versions of theta, to help optimizer
+        #print("de-scaled pars: s    :",s)
+        #print("de-scaled pars: theta:",theta)
         # Check if we are wandering outside parameter boundaries
-        m_out = (s+b+theta < 0)
-        theta_safe = tf.where(m_out,-s-b+small,theta,name="theta_safe")
+        m_out = (s+b+theta < small)
+        #print("unsafe!:", (s+b+theta)[m_out])
+        theta_safe = tf.where(m_out,-s-b+2*small,theta,name="theta_safe")
 
         # Poisson model
         poises0  = tfd.Poisson(rate = s+b+theta_safe)
@@ -145,9 +150,9 @@ class ColliderAnalysis:
            parameters is zero.
         """
         Asamples = {}
-        s = signal_pars['s']
+        s = signal_pars['s'] * self.s_scaling
         b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list 
-        #print("s:",s)
+        #print("Asimov s:",s)
         #print("self.in_cov:", self.in_cov)
         Asamples["{0}::n".format(self.name)] = tf.expand_dims(b + s,0) # Expand to sample dimension size 1
         if self.cov is not None:
@@ -177,7 +182,16 @@ class ColliderAnalysis:
         stacked_seeds = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
         thetas = {"theta": tf.Variable(stacked_seeds, dtype=float, name='theta')}
         return thetas
-       
+
+    def get_all_tensorflow_variables(self,sample_dict):
+        """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model"""
+        seeds = self.get_seeds_all(sample_dict) # Get initial guesses for parameter MLEs
+        stacked_theta = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
+        stacked_s     = np.stack([seeds[sr]['s'] for sr in self.SR_names],axis=-1)
+        pars = {"s": tf.Variable(stacked_s, dtype=float, name='s'),
+                "theta": tf.Variable(stacked_theta, dtype=float, name='theta')}
+        return pars
+        
     def as_dict_short_form(self):
         """Add contents to dictionary, ready for dumping to YAML file
            Compact format version"""
@@ -223,11 +237,61 @@ class ColliderAnalysis:
             df.loc[data[0]] = data[1:]
         return df
 
+    def get_seeds_s_and_nuis(self,samples):
+        """Get seeds for full fit to free signal and nuisance
+           parameters for every SR. Gives exact MLEs in the
+           absence of correlations"""
+        seeds={}
+
+        threshold = 1e-2 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
+
+        n_all = samples['{0}::n'.format(self.name)]
+        if self.cov is not None:
+            xcov_all = samples['{0}::x_cov'.format(self.name)]
+            if np.sum(~self.in_cov)>0:
+                xnocov_all = samples['{0}::x_nocov'.format(self.name)]
+        else:
+            x_all = samples['{0}::x'.format(self.name)]
+
+        for i,sr in enumerate(self.SR_names): 
+            #print("Getting seeds for analysis {0}, region {1}".format(self.name,sr))
+            seeds[sr] = {}
+            # From input
+            n = n_all[...,i] 
+            if self.cov is not None:
+                if sr in self.cov_order:
+                    x = xcov_all[...,i]
+                else:
+                    x = xnocov_all[...,i]
+            else:
+                x = x_all[...,i]
+       
+            # From object member variables
+            b = tf.constant(self.SR_b[i],dtype=float)
+            bsys = tf.constant(self.SR_b_sys[i],dtype=float)
+
+            theta_MLE = x
+            s_MLE = n - x - b
+            l_MLE = s_MLE + b + theta_MLE
+            # Sometimes get l < 0 predictions just due to small numerical errors. Fix these if they
+            # are small enough not to matter
+            mfix = (l_MLE<1e-10) & (l_MLE>-1e-10) # fix up these ones
+            #print('l[mfix]:', l[mfix])
+            acheck = l_MLE<-1e-10 # throw error if too terrible
+            if np.sum(acheck)>0:
+                raise ValueError("Negative signal prediction detected!")
+            theta_MLE[mfix] = x[mfix] + 1e-10
+            l_MLE = s_MLE + b + theta_MLE # recompute this with fixed theta_MLE
+
+            seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i]
+            seeds[sr]['s']     = s_MLE / self.s_scaling[i]
+        return seeds
+
+
     def get_seeds_nuis(self,samples,signal_pars):
         """Get seeds for (additive) nuisance parameter fits,
            assuming fixed signal parameters. Gives exact MLEs in
            the absence of correlations
-           TODO: switch off fits for exactly fitted parameters?
            TODO: Check that signal parameters are, in fact, fixed?
            """
         verbose = False # For debugging
@@ -245,8 +309,8 @@ class ColliderAnalysis:
                 xnocov_all = samples['{0}::x_nocov'.format(self.name)]
         else:
             x_all = samples['{0}::x'.format(self.name)]
-        s_all = signal_pars['s']
-
+        s_all = signal_pars['s'] # non-scaled! 
+ 
         #print("s_all:", s_all)
         #print("n_all:", n_all)
         #print("x_all:", x_all)
@@ -415,7 +479,7 @@ class ColliderAnalysis:
             # Did we get everything? Are there any NaNs left?
             nnans = np.sum(~np.isfinite(theta_MLE))
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
-            seeds[sr]['theta'] = theta_MLE / bsys # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
+            seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i] # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
         #print("seeds:", seeds)
         #quit()
         return seeds
@@ -425,18 +489,24 @@ class JMCJoint(tfd.JointDistributionNamed):
        joint distribution. Uses JointDistributionNamed for most of the
        underlying work.
        
-       analyses - list of analysis-like objects to be combined
+       analyses - dict of analysis-like objects to be combined
        signal - dictionary of dictionaries containing signal parameter
         or constant tensors for each analysis.
        model_type - Specify treame
+       pre_scaled_pars - If true, all input parameters are already scaled such that MLEs
+                         have variance of approx. 1 (for more stable fitting).
+                         If false, parameters are conventionally (i.e. not) scaled, and
+                         required scaling internally.
+                       - 'all', 'nuis', None
     """
    
-    def __init__(self, analyses, pars):
+    def __init__(self, analyses, pars, pre_scaled_pars=None):
         self.analyses = analyses
+        pars = self.prepare_pars(pars,pre_scaled_pars)
         dists = {}
         self.Asamples = {}
         self.Osamples = {}
-        for a in analyses:
+        for a in analyses.values():
             d = a.tensorflow_model(pars[a.name])
             dists.update(d)
             self.Asamples.update(a.get_Asimov_samples(pars[a.name]))
@@ -444,12 +514,57 @@ class JMCJoint(tfd.JointDistributionNamed):
         super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
         self.dists = dists
 
+    def prepare_pars(self,pars,pre_scaled_pars):
+        """Prepare default nuisance parameters and return scaled signal and nuisance parameters for each analysis
+           (scaled such that MLE's in this parameterisation have
+           variance of approx. 1"""
+        scaled_pars = {}
+        for aname,a in self.analyses.items():
+            pardict = pars[aname]
+            a = self.analyses[aname]
+            scaled_pars[aname] = {}
+            if 'nuisance' in pardict.keys() and pardict['nuisance'] is None:
+                # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+                theta_in = tf.constant(0*pardict['s'])
+            else:
+                theta_in = pardict['theta']
+            if pre_scaled_pars is None:
+                #print("Scaling input parameters...")
+                scaled_pars[aname]['s']     = pardict['s'] / a.s_scaling
+                scaled_pars[aname]['theta'] = theta_in / a.theta_scaling
+            elif pre_scaled_pars=='nuis':
+                #print("Scaling only signal parameters: nuisanced parameters already scaled...")
+                scaled_pars[aname]['s']     = pardict['s'] / a.s_scaling
+                scaled_pars[aname]['theta'] = theta_in
+            elif pre_scaled_pars=='all':
+                #print("No scaling applied: all parameters already scaled...")
+                scaled_pars[aname]['s']     = pardict['s']
+                scaled_pars[aname]['theta'] = theta_in
+            else:
+                raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
+        return scaled_pars 
+
+    def get_nuis_parameters(self,signal,samples):
+        """Samples vector and signal provided to compute good starting guesses for parameters"""
+        pars = {}
+        for a in self.analyses.values():
+            pars[a.name] = a.get_nuisance_tensorflow_variables(samples,signal[a.name])
+        return pars
+
+    def get_all_parameters(self,samples):
+        """Samples vector and signal provided to compute good starting guesses for parameters"""
+        pars = {}
+        for a in self.analyses.values():
+            pars[a.name] = a.get_all_tensorflow_variables(samples)
+        return pars
+
+
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
     #print("Loading YAML")
     d = yaml.safe_load(yamlfile)
     #print("YAML loaded")
-    analyses = []
+    analyses = {}
     SR_name_translation = {}
     inverse_translation = {}
     nextID=0
@@ -469,7 +584,8 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
             cov = None
             cov_order = None
         ucz = v["unlisted_corr_zero"]
-        analyses += [ColliderAnalysis(k,srs,cov,cov_order,ucz)]
+        a = ColliderAnalysis(k,srs,cov,cov_order,ucz)
+        analyses[a.name] = a
     if replace_SR_names:
         return analyses, SR_name_translation, inverse_translation
     else:
