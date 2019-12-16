@@ -3,6 +3,7 @@ import yaml
 import pandas as pd
 import tensorflow as tf
 from tensorflow_probability import distributions as tfd
+import massminimize as mm
 import copy
 
 # Stuff to help format YAML output
@@ -10,6 +11,35 @@ class blockseqtrue( list ): pass
 def blockseqtrue_rep(dumper, data):
         return dumper.represent_sequence( u'tag:yaml.org,2002:seq', data, flow_style=True )
 yaml.add_representer(blockseqtrue, blockseqtrue_rep)
+
+def deep_merge(a, b):
+    """
+    From https://stackoverflow.com/a/56177639/1447953
+    Merge two values, with `b` taking precedence over `a`.
+
+    Semantics:
+    - If either `a` or `b` is not a dictionary, `a` will be returned only if
+      `b` is `None`. Otherwise `b` will be returned.
+    - If both values are dictionaries, they are merged as follows:
+        * Each key that is found only in `a` or only in `b` will be included in
+          the output collection with its value intact.
+        * For any key in common between `a` and `b`, the corresponding values
+          will be merged with the same semantics.
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return a if b is None else b
+    else:
+        # If we're here, both a and b must be dictionaries or subtypes thereof.
+
+        # Compute set of all keys in both dictionaries.
+        keys = set(a.keys()) | set(b.keys())
+
+        # Build output dictionary, merging recursively values with common keys,
+        # where `None` is used to mean the absence of a value.
+        return {
+            key: deep_merge(a.get(key), b.get(key))
+            for key in keys
+        }
 
 # Want to convert all this to YAML. Write a simple container to help with this.
 class ColliderAnalysis:
@@ -39,7 +69,7 @@ class ColliderAnalysis:
  
         # Scaling factors to scale canonical input parameters to parameters with ~variance=1 MLEs
         self.s_scaling = np.sqrt(self.SR_b + self.SR_b_sys**2)
-        self.theta_scaling = self.SR_b_sys
+        self.theta_scaling = self.SR_b_sys #/ 10. # Factor 10 experimental 
 
         # Covariance matrix selection and ordering
         self.cov_order = self.get_cov_order()
@@ -104,13 +134,13 @@ class ColliderAnalysis:
         theta = pars['theta'] * self.theta_scaling # We "scan" normalised versions of theta, to help optimizer
         #print("de-scaled pars: s    :",s)
         #print("de-scaled pars: theta:",theta)
-        # Check if we are wandering outside parameter boundaries
-        m_out = (s+b+theta < small)
-        #print("unsafe!:", (s+b+theta)[m_out])
-        theta_safe = tf.where(m_out,-s-b+2*small,theta,name="theta_safe")
-
+        theta_safe = theta
+  
+        #print("theta_safe:", theta_safe)
+        #print("l_safe:", s+b+theta_safe)
+ 
         # Poisson model
-        poises0  = tfd.Poisson(rate = s+b+theta_safe)
+        poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+1e-10) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
         # Treat SR batch dims as event dims
         poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=1)
         tfds["{0}::n".format(self.name)] = poises0i
@@ -185,7 +215,7 @@ class ColliderAnalysis:
 
     def get_all_tensorflow_variables(self,sample_dict):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model"""
-        seeds = self.get_seeds_all(sample_dict) # Get initial guesses for parameter MLEs
+        seeds = self.get_seeds_s_and_nuis(sample_dict) # Get initial guesses for parameter MLEs
         stacked_theta = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
         stacked_s     = np.stack([seeds[sr]['s'] for sr in self.SR_names],axis=-1)
         pars = {"s": tf.Variable(stacked_s, dtype=float, name='s'),
@@ -243,7 +273,7 @@ class ColliderAnalysis:
            absence of correlations"""
         seeds={}
 
-        threshold = 1e-2 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
+        threshold = 1e-4 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
 
         n_all = samples['{0}::n'.format(self.name)]
         if self.cov is not None:
@@ -270,21 +300,41 @@ class ColliderAnalysis:
             b = tf.constant(self.SR_b[i],dtype=float)
             bsys = tf.constant(self.SR_b_sys[i],dtype=float)
 
-            theta_MLE = x
-            s_MLE = n - x - b
-            l_MLE = s_MLE + b + theta_MLE
+            bcast = np.ones((x+b+n).shape) # For easier broadcasting
+ 
+            theta_MLE_tmp = x*bcast
+            s_MLE = (n - x - b)*bcast
+            l_MLE_tmp = (s_MLE + b + theta_MLE_tmp)*bcast
             # Sometimes get l < 0 predictions just due to small numerical errors. Fix these if they
             # are small enough not to matter
-            mfix = (l_MLE<1e-10) & (l_MLE>-1e-10) # fix up these ones
-            #print('l[mfix]:', l[mfix])
-            acheck = l_MLE<-1e-10 # throw error if too terrible
+            mfix = (l_MLE_tmp.numpy()<threshold) & (l_MLE_tmp.numpy()>-threshold) # fix up these ones with small adjustment
+
+            #print("theta_MLE:",theta_MLE_tmp)
+            #print("s_MLE:",s_MLE)
+            #print("n:", n)
+            #print("b:",b)
+            #print("l_MLE:",l_MLE_tmp)
+            #print("mfix:",mfix)
+
+            theta_MLE = np.zeros(theta_MLE_tmp.shape)
+            theta_MLE[mfix] = x.numpy()[mfix] + 2*threshold
+            theta_MLE[~mfix] = x.numpy()[~mfix]
+
+            acheck = (s_MLE + b + theta_MLE).numpy()<threshold # Should have been fixed
+            # Error if too negative. rate MLE should never be negative.
             if np.sum(acheck)>0:
-                raise ValueError("Negative signal prediction detected!")
-            theta_MLE[mfix] = x[mfix] + 1e-10
-            l_MLE = s_MLE + b + theta_MLE # recompute this with fixed theta_MLE
+                print("Negative rate MLEs!:")
+                print("theta_MLE:",theta_MLE[acheck])
+                print("s_MLE:",s_MLE[acheck])
+                print("l_MLE:",(s_MLE+b+theta_MLE)[acheck])
+                raise ValueError("{0} negative rate MLEs detected!".format(np.sum(acheck)))
 
             seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i]
             seeds[sr]['s']     = s_MLE / self.s_scaling[i]
+
+            #print("seeds[{0}], theta: {1}".format(sr,seeds[sr]['theta']))
+            #print("seeds[{0}], s    : {1}".format(sr,seeds[sr]['s']))
+
         return seeds
 
 
@@ -300,7 +350,7 @@ class ColliderAnalysis:
         self.theta_both={} # For debugging, need to compare BOTH solutions to numerical MLEs.
         self.theta_dat={}
 
-        threshold = 1e-2 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
+        threshold = 1e-4 # Smallness threshold, for fixing numerical errors and disallowing solutions too close to zero
 
         n_all = samples['{0}::n'.format(self.name)]
         if self.cov is not None:
@@ -484,6 +534,59 @@ class ColliderAnalysis:
         #quit()
         return seeds
 
+qtrace = []
+def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars):
+    """General -2logL function to optimise"""
+    if const_pars is None:
+        all_pars = pars
+    else:
+        all_pars = deep_merge(const_pars,pars)
+    #print("all_pars:",all_pars)
+    joint = JMCJoint(analyses,all_pars,pre_scaled_pars)
+    q = -2*joint.log_prob(data)
+    global qtrace
+    qtrace += [q]
+    total_loss = tf.math.reduce_sum(q)
+    return total_loss, q, None, None
+
+def optimize(pars,const_pars,analyses,data,pre_scaled_pars,log_tag=''):
+    """Wrapper for optimizer step that skips it if the initial guesses are known
+       to be exact MLEs"""
+
+    opts = {"optimizer": "Adam",
+            "step": 0.05,
+            "tol": 0.01,
+            "grad_tol": 1e-4,
+            "max_it": 100,
+            "max_same": 5,
+            'log_tag': log_tag 
+            }
+
+    kwargs = {'const_pars': const_pars,
+              'analyses': analyses,
+              'data': data,
+              'pre_scaled_pars': pre_scaled_pars
+              }
+
+    exact_MLEs = False #True
+    for a in analyses.values():
+        if a.cov is not None: exact_MLEs = False # TODO: generalise exactness determination
+    if exact_MLEs:
+        print("All starting MLE guesses are exact: skipping optimisation") 
+        total_loss, q, none, none = neg2LogL(pars,**kwargs)
+    else:
+        print("Beginning optimisation")
+        #f = tf.function(mm.tools.func_partial(neg2LogL,**kwargs))
+        f = mm.tools.func_partial(neg2LogL,**kwargs)
+        q, none, none = mm.optimize(pars, f, **opts)
+    # Rebuild distribution object with fitted parameters
+    if const_pars is None:
+        all_pars = pars
+    else:
+        all_pars = deep_merge(const_pars,pars)
+    joint = JMCJoint(analyses,all_pars,pre_scaled_pars)
+    return joint, q
+
 class JMCJoint(tfd.JointDistributionNamed):
     """Object to combine analyses together and treat them as a single
        joint distribution. Uses JointDistributionNamed for most of the
@@ -500,28 +603,32 @@ class JMCJoint(tfd.JointDistributionNamed):
                        - 'all', 'nuis', None
     """
    
-    def __init__(self, analyses, pars, pre_scaled_pars=None):
+    def __init__(self, analyses, pars=None, pre_scaled_pars=None):
         self.analyses = analyses
-        pars = self.prepare_pars(pars,pre_scaled_pars)
-        dists = {}
-        self.Asamples = {}
-        self.Osamples = {}
-        for a in analyses.values():
-            d = a.tensorflow_model(pars[a.name])
-            dists.update(d)
-            self.Asamples.update(a.get_Asimov_samples(pars[a.name]))
-            self.Osamples.update(a.get_observed_samples())
-        super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
-        self.dists = dists
+        if pars is not None:
+            self.pars = self.prepare_pars(pars,pre_scaled_pars)
+            dists = {} 
+            self.Asamples = {}
+            self.Osamples = {}
+            for a in analyses.values():
+                d = a.tensorflow_model(self.pars[a.name])
+                dists.update(d)
+                self.Asamples.update(a.get_Asimov_samples(self.pars[a.name]))
+                self.Osamples.update(a.get_observed_samples())
+            super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
+            self.dists = dists
+        # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
+        # TODO: can we fail more gracefully if people try to do this?
+        #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
 
     def prepare_pars(self,pars,pre_scaled_pars):
         """Prepare default nuisance parameters and return scaled signal and nuisance parameters for each analysis
            (scaled such that MLE's in this parameterisation have
            variance of approx. 1"""
         scaled_pars = {}
+        #print("pars:",pars)
         for aname,a in self.analyses.items():
             pardict = pars[aname]
-            a = self.analyses[aname]
             scaled_pars[aname] = {}
             if 'nuisance' in pardict.keys() and pardict['nuisance'] is None:
                 # trigger shortcut to set nuisance parameters to zero, for sample generation. 
@@ -558,6 +665,59 @@ class JMCJoint(tfd.JointDistributionNamed):
             pars[a.name] = a.get_all_tensorflow_variables(samples)
         return pars
 
+    def fit_nuisance(self,signal,samples,log_tag=''):
+        """Fit nuisance parameters to samples for a fixed signal
+           (ignores parameters that were used to construct this object)"""
+        nuis_pars = self.get_nuis_parameters(signal,samples)
+        joint_fitted, q = optimize(nuis_pars,signal,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag)
+        return q, joint_fitted, nuis_pars
+
+    def fit_all(self,samples,log_tag=''):
+        """Fit all signal and nuisance parameters to samples
+           (ignores parameters that were used to construct this object)"""
+        all_pars = self.get_all_parameters(samples)
+        joint_fitted, q = optimize(all_pars,None,self.analyses,samples,pre_scaled_pars='all',log_tag=log_tag)
+        return q, joint_fitted, all_pars
+
+    def cat_pars(self,pars):
+        """Stack tensorflow parameters in known order"""
+        parlist = []
+        for ka,a in self.pars.items():
+            for kp,p in a.items():
+                parlist += [p]
+        return tf.Variable(tf.concat(parlist,axis=-1),name="all_parameters")               
+
+    def uncat_pars(self,catted_pars):
+        """De-stack tensorflow parameters back into separate variables of
+           shapes know to each analysis. Assumes stacked_pars are of the
+           same structure as self.pars"""
+        pars = {}
+        i = 0
+        for ka,a in self.pars.items():
+            pars[ka] = {}
+            for kp,p in a.items():
+                N = p.shape[-1]
+                pars[ka][kp] = catted_pars[...,i:i+N]
+                i+=N
+        return pars
+
+    def get_Hessian(self,samples):
+        """Obtain Hessian matrix at input parameter point"""
+
+        # Stack current parameter values to single tensorflow variable for
+        # easier matrix manipulation
+        catted_pars = self.cat_pars(self.pars)
+        #print("catted_pats:", catted_pars)
+        with tf.GradientTape(persistent=True) as tape:
+            pars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
+            joint = JMCJoint(self.analyses,pars,pre_scaled_pars='all')
+            q = -2*joint.log_prob(samples)
+            grads = tape.gradient(q, catted_pars)
+        #print("grads:", grads)
+        hessians = tape.batch_jacobian(grads, catted_pars) # batch_jacobian takes first (the sample) dimensions as independent for much better efficiency
+        print("H:",hessians)
+
+        quit()
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
