@@ -6,7 +6,7 @@ import seaborn as sns
 import numpy as np
 import scipy.stats as sps
 
-N = int(5e4)
+N = int(5e3)
 do_mu_tests=True
 do_gof_tests=True
 
@@ -30,7 +30,7 @@ analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_13T
 #analyses = analyses_read
 stream.close()
 
-s_in = [.5,1.]
+s_in = [0.1,.5,1.,2.,3.]
 #s_in = [1.,10.]
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
@@ -112,14 +112,19 @@ if do_mu_tests:
                 print("Fitting GOF w.r.t signal samples")
                 qgof_sb, joint_gof_fitted_sb ,gof_pars  = joint.fit_all(samples0s, log_tag='gof_all_sb')
 
-                # Obtain Hessian matrices for each sample at best fit points
-                H = joint_gof_fitted_b.get_Hessian(samples0)
+                # Obtain function to compute neg2logl for fitted samples, for any fixed input signal,
+                # with nuisance parameters analytically profiled out using a second order Taylor expansion
+                # about the GOF best fit points.
+                f = joint_gof_fitted_b.quad_loglike_f(samples0)
+                qsb_quad = f(signal)
+                print("qsb_quad:", qsb_quad)
 
                 print("Fitting w.r.t background-only samples")
                 qb , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
                 qsb, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0, log_tag='qsb')
                 q = qsb - qb # mu=0 distribution
-        
+                q_quad = qsb_quad - qb
+
                 print("Fitting w.r.t signal samples")
                 qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
                 qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
@@ -163,6 +168,7 @@ if do_mu_tests:
          
             if do_MC:
                 qb  = q[:,i].numpy()
+                qb_quad = q_quad[:,i].numpy()
                 qsb = q_s[:,i].numpy()
                 if np.sum(np.isfinite(qb)) < 2:
                     print("qb mostly nan!")
@@ -172,9 +178,11 @@ if do_mu_tests:
                 qsb = qsb[np.isfinite(qsb)]
         
                 sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
                 sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
         
                 sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
                 sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
 
                 # GOF

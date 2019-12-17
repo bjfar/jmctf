@@ -682,18 +682,19 @@ class JMCJoint(tfd.JointDistributionNamed):
     def cat_pars(self,pars):
         """Stack tensorflow parameters in known order"""
         parlist = []
-        for ka,a in self.pars.items():
+        for ka,a in pars.items():
             for kp,p in a.items():
                 parlist += [p]
         return tf.Variable(tf.concat(parlist,axis=-1),name="all_parameters")               
 
-    def uncat_pars(self,catted_pars):
+    def uncat_pars(self,catted_pars,pars_template=None):
         """De-stack tensorflow parameters back into separate variables of
            shapes know to each analysis. Assumes stacked_pars are of the
-           same structure as self.pars"""
+           same structure as pars_template"""
+        if pars_template is None: pars_template = self.pars
         pars = {}
         i = 0
-        for ka,a in self.pars.items():
+        for ka,a in pars_template.items():
             pars[ka] = {}
             for kp,p in a.items():
                 N = p.shape[-1]
@@ -701,8 +702,8 @@ class JMCJoint(tfd.JointDistributionNamed):
                 i+=N
         return pars
 
-    def get_Hessian(self,samples):
-        """Obtain Hessian matrix at input parameter point"""
+    def Hessian(self,samples):
+        """Obtain Hessian matrix (and grad) at input parameter point"""
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
@@ -715,9 +716,134 @@ class JMCJoint(tfd.JointDistributionNamed):
             grads = tape.gradient(q, catted_pars)
         #print("grads:", grads)
         hessians = tape.batch_jacobian(grads, catted_pars) # batch_jacobian takes first (the sample) dimensions as independent for much better efficiency
-        print("H:",hessians)
+        #print("H:",hessians)
+        # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses. TODO: throw better error if dimension sizes not 1
+        grads_out = tf.squeeze(grads,axis=[-2])
+        hessians_out = tf.squeeze(hessians,axis=[-2,-4])
+        #print("g_out:",grads_out)
+        #print("H_out:",hessians_out)
+        return hessians_out, grads_out
 
-        quit()
+    def decomposed_parameters(self,pars):
+        """Separate input parameters into 'interest' and 'nuisance' lists,
+           keeping tracking of their original 'indices' w.r.t. catted format.
+           Mainly used for decomposing Hessian matrix."""
+        interest_i = {} # indices of parameters in Hessian/stacked pars
+        nuisance_i = {}
+        interest_p = {} # parameters themselves
+        nuisance_p = {}         
+        i = 0
+        Ni = 0 # Track how many interest/nuisance parameters there are in total
+        Nn = 0
+        for ka,a in pars.items():
+            interest_p[ka] = {}
+            nuisance_p[ka] = {}
+            interest_i[ka] = {}
+            nuisance_i[ka] = {}
+            for kp,p in a.items():
+                N = p.shape[-1]
+                if kp=='theta': #TODO need a more general method for determining which are the nuisance parameters
+                    nuisance_p[ka][kp] = p
+                    nuisance_i[ka][kp] = (i, N)
+                    Ni += N
+                else:
+                    interest_p[ka][kp] = p
+                    interest_i[ka][kp] = (i, N)
+                    Nn += N
+                i+=N
+        return interest_i, interest_p, nuisance_i, nuisance_p
+
+    def sub_Hessian(self,H,pari,parj,idim=-1,jdim=-2):
+        """Extract sub-Hessian matrix from full Hessian H,
+           using dictionary that provides indices for selected
+           parameters in H"""
+        ilist = []
+        for ai in pari.values():
+            for i,Ni in ai.values():
+                ilist += [ix for ix in range(i,i+Ni)] 
+        jlist = []
+        for aj in parj.values():
+            for j,Nj in aj.values():
+                jlist += [jx for jx in range(j,j+Nj)] 
+        #print("H.shape:",H.shape)
+        #print("ilist:",ilist)
+        #print("jlist:",jlist)
+        # Use gather to extract row/column slices from Hessian
+        subH_i = tf.gather(H,      ilist, axis=idim)
+        subH   = tf.gather(subH_i, jlist, axis=jdim)
+        return subH
+
+    def sub_grad(self,grad,pari,idim=-1):
+        """Extract sub-gradient vector from full grad,
+           using dictionary that provides indices for selected
+           parameters in grad"""
+        ilist = []
+        for ai in pari.values():
+            for i,Ni in ai.values():
+                ilist += [ix for ix in range(i,i+Ni)] 
+        sub_grad = tf.gather(grad, ilist, axis=idim)
+        return sub_grad
+
+    def decompose_Hessian(self,H,parsi,parsj):
+        """Decompose Hessian matrix into
+           parameter blocks"""
+        Hii = self.sub_Hessian(H,parsi,parsj)
+        Hjj = self.sub_Hessian(H,parsj,parsj) # Actually we don't need this block for now.
+        Hij = self.sub_Hessian(H,parsi,parsj) #Off-diagonal block. Symmetric so we don't need both.
+        return Hii, Hjj, Hij
+
+    def quad_loglike_prep(self,samples):
+        """Compute second-order Taylor expansion of log-likelihood surface
+           around input parameter point(s), and compute quantities needed
+           for analytic determination of profile likelihood for fixed signal
+           parameters, under this approximation."""
+        print("Computing Hessian and various matrix operations for all samples...") 
+        H, g = self.Hessian(samples)
+        interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(self.pars)
+        Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
+        Hnn_inv = tf.linalg.inv(Hnn)
+        gn = self.sub_grad(g,nuisance_i)
+        A = tf.linalg.matvec(Hnn_inv,gn)
+        B = tf.linalg.matmul(Hnn_inv,Hin)
+        print("...done!")
+        return A, B, interest_p, nuisance_p
+
+    def quad_loglike_f(self,samples):
+        """Return a function that can be used to compute the profile log-likelihood
+           for fixed signal parametes, for many signal hypotheses, using a 
+           second-order Taylor expandion of the likelihood surface about a point to
+           determine the profiled nuisance parameter values. 
+           Should be used after pars are fitted to the global best fit for best
+           expansion."""
+        A, B, interest_p, nuisance_p = self.quad_loglike_prep(samples)
+        f = mm.tools.func_partial(self.neg2loglike_quad,samples=samples,A=A,B=B,interest=interest_p,nuisance=nuisance_p)
+        return f
+
+    def neg2loglike_quad(self,signal,A,B,interest,nuisance,samples):
+        """Compute -2*loglikelihood using pre-computed Taylor expansion
+           parameters (for many samples) for a set of signal hypotheses"""
+        # Stack signal parameters into appropriate vector for matrix operations
+        parlist = []
+        for ka,a in interest.items():
+            if ka not in signal.keys():
+                raise ValueError("No test signals provided for analysis {0}".format(ka)) 
+            for kp in a.keys():
+                if kp not in signal[ka].keys():
+                    raise ValueError("No test signals provided for region {0} in analysis {1}".format(kp,ka))
+                parlist += [signal[ka][kp]]
+        s = tf.constant(tf.concat(parlist,axis=-1),name="all_signal_parameters")               
+        theta_0 = self.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
+        #print("theta_0.shape:",theta_0.shape)
+        #print("A.shape:",A.shape)
+        #print("B.shape:",B.shape)
+        #print("s.shape:",s.shape)
+        theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0))
+        # de-stack theta_prof
+        theta_prof_dict = self.uncat_pars(theta_prof,pars_template=nuisance)
+        # Compute -2*log_prop
+        joint = JMCJoint(self.analyses,deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
+        q = -2*joint.log_prob(samples)
+        return q
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
