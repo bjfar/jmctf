@@ -6,7 +6,7 @@ import seaborn as sns
 import numpy as np
 import scipy.stats as sps
 
-N = int(5e3)
+N = int(5e2)
 do_mu_tests=True
 do_gof_tests=True
 
@@ -119,7 +119,9 @@ if do_mu_tests:
                 #print("fitted pars:", gof_pars_b)
                 f = joint_gof_fitted_b.quad_loglike_f(samples0)
                 qsb_quad = f(signal)
+                qb_quad = f(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
                 #print("qsb_quad:", qsb_quad)
+                q_quad = qsb_quad - qb_quad
 
                 print("Fitting w.r.t background-only samples")
                 qb , joint_fitted, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
@@ -127,8 +129,6 @@ if do_mu_tests:
                 #print("qsb:", qsb)
                 #print("nuis_s:", joint.descale_pars(nuis_pars_s))
                 q = qsb - qb # mu=0 distribution
-                q_quad = qsb_quad - qb
-
                 print("Fitting w.r.t signal samples")
                 qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
                 qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
