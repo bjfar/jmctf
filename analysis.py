@@ -137,7 +137,7 @@ class ColliderAnalysis:
         theta_safe = theta
   
         #print("theta_safe:", theta_safe)
-        #print("l_safe:", s+b+theta_safe)
+        #print("rate:", s+b+theta_safe)
  
         # Poisson model
         poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+1e-10) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
@@ -651,6 +651,17 @@ class JMCJoint(tfd.JointDistributionNamed):
                 raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
         return scaled_pars 
 
+    def descale_pars(self,pars):
+        """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
+        descaled_pars = {}
+        for ka,a in self.analyses.items():
+          if ka in pars.keys():
+            pardict = pars[ka]
+            descaled_pars[ka] = {}
+            if 's' in pardict.keys():     descaled_pars[ka]['s']     = pardict['s'] * a.s_scaling
+            if 'theta' in pardict.keys(): descaled_pars[ka]['theta'] = pardict['theta'] * a.theta_scaling
+        return descaled_pars
+
     def get_nuis_parameters(self,signal,samples):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
@@ -702,16 +713,17 @@ class JMCJoint(tfd.JointDistributionNamed):
                 i+=N
         return pars
 
-    def Hessian(self,samples):
-        """Obtain Hessian matrix (and grad) at input parameter point"""
+    def Hessian(self,pars,samples):
+        """Obtain Hessian matrix (and grad) at input parameter point
+           Make sure to use de-scaled parameters as input!"""
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        catted_pars = self.cat_pars(self.pars)
+        catted_pars = self.cat_pars(pars)
         #print("catted_pats:", catted_pars)
         with tf.GradientTape(persistent=True) as tape:
-            pars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
-            joint = JMCJoint(self.analyses,pars,pre_scaled_pars='all')
+            inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
+            joint = JMCJoint(self.analyses,inpars,pre_scaled_pars=None)
             q = -2*joint.log_prob(samples)
             grads = tape.gradient(q, catted_pars)
         #print("grads:", grads)
@@ -733,8 +745,6 @@ class JMCJoint(tfd.JointDistributionNamed):
         interest_p = {} # parameters themselves
         nuisance_p = {}         
         i = 0
-        Ni = 0 # Track how many interest/nuisance parameters there are in total
-        Nn = 0
         for ka,a in pars.items():
             interest_p[ka] = {}
             nuisance_p[ka] = {}
@@ -745,11 +755,9 @@ class JMCJoint(tfd.JointDistributionNamed):
                 if kp=='theta': #TODO need a more general method for determining which are the nuisance parameters
                     nuisance_p[ka][kp] = p
                     nuisance_i[ka][kp] = (i, N)
-                    Ni += N
                 else:
                     interest_p[ka][kp] = p
                     interest_i[ka][kp] = (i, N)
-                    Nn += N
                 i+=N
         return interest_i, interest_p, nuisance_i, nuisance_p
 
@@ -787,8 +795,8 @@ class JMCJoint(tfd.JointDistributionNamed):
     def decompose_Hessian(self,H,parsi,parsj):
         """Decompose Hessian matrix into
            parameter blocks"""
-        Hii = self.sub_Hessian(H,parsi,parsj)
-        Hjj = self.sub_Hessian(H,parsj,parsj) # Actually we don't need this block for now.
+        Hii = self.sub_Hessian(H,parsi,parsi)
+        Hjj = self.sub_Hessian(H,parsj,parsj)
         Hij = self.sub_Hessian(H,parsi,parsj) #Off-diagonal block. Symmetric so we don't need both.
         return Hii, Hjj, Hij
 
@@ -797,14 +805,21 @@ class JMCJoint(tfd.JointDistributionNamed):
            around input parameter point(s), and compute quantities needed
            for analytic determination of profile likelihood for fixed signal
            parameters, under this approximation."""
-        print("Computing Hessian and various matrix operations for all samples...") 
-        H, g = self.Hessian(samples)
-        interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(self.pars)
+        pars = self.descale_pars(self.pars) # Make sure to use non-scaled parameters to get correct gradients etc.
+        print("Computing Hessian and various matrix operations for all samples...")
+        H, g = self.Hessian(pars,samples)
+        #print("g:", g) # Should be close to zero if fits worked correctly
+        interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
+        #print("self.pars:", self.pars)
+        #print("descaled_pars:", pars)
+        #print("samples:", samples)
+        #print("interest_p:", interest_p)
+        #print("nuisance_p:", nuisance_p)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
         Hnn_inv = tf.linalg.inv(Hnn)
         gn = self.sub_grad(g,nuisance_i)
         A = tf.linalg.matvec(Hnn_inv,gn)
-        B = tf.linalg.matmul(Hnn_inv,Hin)
+        B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here
         print("...done!")
         return A, B, interest_p, nuisance_p
 
@@ -816,7 +831,7 @@ class JMCJoint(tfd.JointDistributionNamed):
            Should be used after pars are fitted to the global best fit for best
            expansion."""
         A, B, interest_p, nuisance_p = self.quad_loglike_prep(samples)
-        f = mm.tools.func_partial(self.neg2loglike_quad,samples=samples,A=A,B=B,interest=interest_p,nuisance=nuisance_p)
+        f = mm.tools.func_partial(self.neg2loglike_quad,A=A,B=B,interest=interest_p,nuisance=nuisance_p,samples=samples)
         return f
 
     def neg2loglike_quad(self,signal,A,B,interest,nuisance,samples):
@@ -831,15 +846,20 @@ class JMCJoint(tfd.JointDistributionNamed):
                 if kp not in signal[ka].keys():
                     raise ValueError("No test signals provided for region {0} in analysis {1}".format(kp,ka))
                 parlist += [signal[ka][kp]]
-        s = tf.constant(tf.concat(parlist,axis=-1),name="all_signal_parameters")               
+        s = tf.constant(tf.concat(parlist,axis=-1),name="all_signal_parameters")
+        s_0 = self.cat_pars(interest) # stacked interest parameter values at expansion point
         theta_0 = self.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
         #print("theta_0.shape:",theta_0.shape)
         #print("A.shape:",A.shape)
         #print("B.shape:",B.shape)
         #print("s.shape:",s.shape)
-        theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0))
+        #print("s_0.shape:",s_0.shape)
+        theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
+        #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         # de-stack theta_prof
         theta_prof_dict = self.uncat_pars(theta_prof,pars_template=nuisance)
+        #print("theta_prof_dict:", theta_prof_dict)
+        #print("signal:", signal)
         # Compute -2*log_prop
         joint = JMCJoint(self.analyses,deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
         q = -2*joint.log_prob(samples)

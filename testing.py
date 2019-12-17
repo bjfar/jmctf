@@ -6,7 +6,7 @@ import seaborn as sns
 import numpy as np
 import scipy.stats as sps
 
-N = int(5e3)
+N = int(5e4)
 do_mu_tests=True
 do_gof_tests=True
 
@@ -20,18 +20,19 @@ analyses_read, SR_map, iSR_map = collider_analyses_from_long_YAML(stream,replace
 #analyses = analyses_read[10:] # For testing
 #analyses = [analyses_read[16]] # For testing
 #analyses = analyses_read[2:4] # For testing
-analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_13TeV_2OSLEP_36invfb"}
+#analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_13TeV_2OSLEP_36invfb"}
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_3b_discoverySR_24invfb"]
-#analyses_read = {name: a for name,a in analyses_read.items() if a.name=="TEST"}
+analyses_read = {name: a for name,a in analyses_read.items() if a.name=="TEST"}
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_RJ3L_3Lep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2LEPsoft_36invfb"]
 #analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_8TeV_MultiLEP_3Lep_20invfb"}
 #analyses = analyses_read
 stream.close()
 
-s_in = [0.1,.5,1.,2.,3.]
-#s_in = [1.,10.]
+#s_in = [0.2,.5,1.,2.]
+#s_in = [0.1,1.,10.,20.]
+s_in = [1.,10.,100.,200.]
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
 nullnuis = {a.name: {'nuisance': None} for a in analyses_read.values()} # Use to automatically set nuisance parameters to zero for sample generation
@@ -108,20 +109,23 @@ if do_mu_tests:
         
             if do_gof_tests:
                 print("Fitting GOF w.r.t background-only samples")
-                qgof_b, joint_gof_fitted_b, gof_pars  = joint.fit_all(samples0, log_tag='gof_all_b')
+                qgof_b, joint_gof_fitted_b, gof_pars_b  = joint.fit_all(samples0, log_tag='gof_all_b')
                 print("Fitting GOF w.r.t signal samples")
-                qgof_sb, joint_gof_fitted_sb ,gof_pars  = joint.fit_all(samples0s, log_tag='gof_all_sb')
+                qgof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
 
                 # Obtain function to compute neg2logl for fitted samples, for any fixed input signal,
                 # with nuisance parameters analytically profiled out using a second order Taylor expansion
                 # about the GOF best fit points.
+                #print("fitted pars:", gof_pars_b)
                 f = joint_gof_fitted_b.quad_loglike_f(samples0)
                 qsb_quad = f(signal)
-                print("qsb_quad:", qsb_quad)
+                #print("qsb_quad:", qsb_quad)
 
                 print("Fitting w.r.t background-only samples")
-                qb , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
-                qsb, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0, log_tag='qsb')
+                qb , joint_fitted, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
+                qsb, joint_fitted, nuis_pars_s = joint.fit_nuisance(signal, samples0, log_tag='qsb')
+                #print("qsb:", qsb)
+                #print("nuis_s:", joint.descale_pars(nuis_pars_s))
                 q = qsb - qb # mu=0 distribution
                 q_quad = qsb_quad - qb
 
@@ -134,10 +138,10 @@ if do_mu_tests:
                 qgofb_true = qb - qgof_b # Test of b-only when b is true
                 qgofsb_true = qsb_s - qgof_sb # Test of s when s is true
                 # the above should both be asymptotically chi^2
-                N_gof_pars = sum([par.shape[-1] for a in gof_pars.values() for par in a.values()])
+                N_gof_pars = sum([par.shape[-1] for a in gof_pars_b.values() for par in a.values()])
                 N_nuis_pars = sum([par.shape[-1] for a in nuis_pars.values() for par in a.values()])
-                print("N_gof_pars:",N_gof_pars)
-                print("N_nuis_pars:")
+                #print("N_gof_pars:",N_gof_pars)
+                #print("N_nuis_pars:")
                 DOF = N_gof_pars - N_nuis_pars
 
         # Fit distributions for observed datasets
