@@ -819,7 +819,7 @@ class JMCJoint(tfd.JointDistributionNamed):
         Hnn_inv = tf.linalg.inv(Hnn)
         gn = self.sub_grad(g,nuisance_i)
         A = tf.linalg.matvec(Hnn_inv,gn)
-        B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here
+        B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         print("...done!")
         return A, B, interest_p, nuisance_p
 

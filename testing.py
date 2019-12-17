@@ -6,7 +6,7 @@ import seaborn as sns
 import numpy as np
 import scipy.stats as sps
 
-N = int(5e4)
+N = int(5e3)
 do_mu_tests=True
 do_gof_tests=True
 
@@ -32,7 +32,7 @@ stream.close()
 
 #s_in = [0.2,.5,1.,2.]
 #s_in = [0.1,1.,10.,20.]
-s_in = [1.,10.,100.,200.]
+s_in = [1.,10.,20.,50.]
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
 nullnuis = {a.name: {'nuisance': None} for a in analyses_read.values()} # Use to automatically set nuisance parameters to zero for sample generation
