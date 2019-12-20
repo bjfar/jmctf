@@ -5,10 +5,25 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import scipy.stats as sps
+import scipy.interpolate as spi
 
-N = int(5e2)
+N = int(5e3)
 do_mu_tests=True
 do_gof_tests=True
+
+def eCDF(x):
+    """Get empirical CDF of some samples"""
+    return np.arange(1, len(x)+1)/float(len(x))
+
+def CDFf(samples,reverse=False):
+    """Return interpolating function for CDF of some simulated samples"""
+    if reverse:
+        s = np.argsort(samples[np.isfinite(samples)],axis=0)[::-1] 
+    else:
+        s = np.argsort(samples[np.isfinite(samples)],axis=0)
+    ecdf = eCDF(samples[s])
+    CDF = spi.interp1d([-1e99]+list(samples[s])+[1e99],[ecdf[0]]+list(ecdf)+[ecdf[1]])
+    return CDF, s #pvalue may be 1 - CDF(obs), depending on definition/ordering
 
 print("Starting...")
 
@@ -24,18 +39,42 @@ analyses_read, SR_map, iSR_map = collider_analyses_from_long_YAML(stream,replace
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_MultiLEP_2SSLep_36invfb"]
 #analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_3b_discoverySR_24invfb"]
 analyses_read = {name: a for name,a in analyses_read.items() if a.name=="TEST"}
-#analyses = [a for a in analyses_read if a.name=="ATLAS_13TeV_RJ3L_3Lep_36invfb"]
+#analyses_read = {name: a for name,a in analyses_read.items() if a.name=="ATLAS_13TeV_RJ3L_3Lep_36invfb"}
 #analyses = [a for a in analyses_read if a.name=="CMS_13TeV_2LEPsoft_36invfb"]
 #analyses_read = {name: a for name,a in analyses_read.items() if a.name=="CMS_8TeV_MultiLEP_3Lep_20invfb"}
 #analyses = analyses_read
 stream.close()
 
-#s_in = [0.2,.5,1.,2.]
+#s_in = [0.2,.5,1.,2.,5.]
 #s_in = [0.1,1.,10.,20.]
-s_in = [1.,10.,20.,50.]
+#s_in = [1.,10.,20.,50.]
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
-signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
+#signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
 nullnuis = {a.name: {'nuisance': None} for a in analyses_read.values()} # Use to automatically set nuisance parameters to zero for sample generation
+
+# Generate grid of samples for TEST analysis
+def ndim_grid(start,stop,N):
+    # Set number of dimensions
+    ndims = len(start)
+
+    # List of ranges across all dimensions
+    L = [np.linspace(start[i],stop[i],N) for i in range(ndims)]
+
+    # Finally use meshgrid to form all combinations corresponding to all 
+    # dimensions and stack them as M x ndims array
+    return np.hstack((np.meshgrid(*L))).swapaxes(0,1).reshape(ndims,-1).T
+
+start = []
+stop = []
+a = analyses_read["TEST"]
+b     = a.SR_b 
+b_sys = a.SR_b_sys 
+for bi,bsysi in zip(b,b_sys):
+    start += [bi-5*bsysi]
+    stop  += [bi+5*bsysi]
+sgrid = ndim_grid(start,stop,10)
+signal = {"TEST": {'s': tf.constant(sgrid,dtype=float)}}
+Ns = len(sgrid)
 
 # ATLAS_13TeV_RJ3L_3Lep_36invfb
 # # best fit signal from MSSMEW analysis, for testing
@@ -113,22 +152,59 @@ if do_mu_tests:
                 print("Fitting GOF w.r.t signal samples")
                 qgof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
 
+                print("Fitting w.r.t background-only samples")
+                qb , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
+                qsb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(signal, samples0, log_tag='qsb')
+                #print("qsb:", qsb)
+                #print("nuis_s:", joint.descale_pars(nuis_pars_s))
+                q = qsb - qb # mu=0 distribution
+
                 # Obtain function to compute neg2logl for fitted samples, for any fixed input signal,
                 # with nuisance parameters analytically profiled out using a second order Taylor expansion
                 # about the GOF best fit points.
                 #print("fitted pars:", gof_pars_b)
-                f = joint_gof_fitted_b.quad_loglike_f(samples0)
-                qsb_quad = f(signal)
-                qb_quad = f(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
-                #print("qsb_quad:", qsb_quad)
-                q_quad = qsb_quad - qb_quad
+                f1 = joint_gof_fitted_b.quad_loglike_f(samples0)
 
-                print("Fitting w.r.t background-only samples")
-                qb , joint_fitted, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
-                qsb, joint_fitted, nuis_pars_s = joint.fit_nuisance(signal, samples0, log_tag='qsb')
-                #print("qsb:", qsb)
-                #print("nuis_s:", joint.descale_pars(nuis_pars_s))
-                q = qsb - qb # mu=0 distribution
+                # What if we expand about the no-signal point instead? Just to see...
+                f2 = joint_fitted_b.quad_loglike_f(samples0)
+                # Huh, seems to work way better. I guess it should be better when the test signals are small?
+
+                # Can we combine the two? Weight be inverse square euclidean distance in GOF parameter space?
+                # Something smarter?
+                def combf(signal):
+                    p1 = nosignal
+                    p2 = gof_pars_b
+                    print("p1:", p1)
+                    print("p2:", p2)
+                    print("signal", signal)
+                    dist1_squared = 0
+                    dist2_squared = 0
+                    for ka,a in signal.items():
+                        for pa,p in a.items():
+                            dist1_squared += (tf.expand_dims(signal[ka][pa],axis=0) - tf.expand_dims(p1[ka][pa],axis=0))**2 
+                            dist2_squared += (tf.expand_dims(signal[ka][pa],axis=0) - p2[ka][pa])**2 
+                    w1 = tf.reduce_sum(1./dist1_squared,axis=-1)
+                    w2 = tf.reduce_sum(1./dist2_squared,axis=-1)
+                    print("w1:", w1)
+                    print("w2:", w2)
+                    w = w1+w2
+                    return (w1/w)*f1(signal) + (w2/w)*f2(signal)
+
+                qsb_quad = f2(signal)
+                #qsb_quad = combf(signal)
+                #qb_quad = f2(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
+                #print("qsb_quad:", qsb_quad)
+                #q_quad = qsb_quad - qb_quad
+                q_quad = qsb_quad - qb # Using quad approx only for signal half. Biased, but maybe better p-value behaviour.
+
+                # Loop over signal hypotheses, get qpdf for each, and get MC'd local-pvalues for all samples
+                MCcdf, order = CDFf(qb)
+                print("qb:",qb)
+                print("MCcdf(qb):", MCcdf(qb))
+                fullMCp = -sps.norm.ppf(MCcdf(qb))
+                quadMCp = -sps.norm.ppf(MCcdf(qb_quad))
+
+
                 print("Fitting w.r.t signal samples")
                 qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
                 qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
@@ -157,9 +233,10 @@ if do_mu_tests:
         
         print("GOF BF pars:", pars)
 
-        nplots = len(s_in)
+        nplots = Ns
         fig  = plt.figure(figsize=(12,4*nplots))
         fig2 = plt.figure(figsize=(12,4*nplots))
+        fig3 = plt.figure(figsize=(6,4*nplots))
         for i in range(nplots):
             ax1 = fig.add_subplot(nplots,2,2*i+1)
             ax2 = fig.add_subplot(nplots,2,2*i+2)
@@ -181,21 +258,41 @@ if do_mu_tests:
                 qb = qb[np.isfinite(qb)]
                 qsb = qsb[np.isfinite(qsb)]
         
-                sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
-                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
-                sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qb , bins=50, color='b',kde=False, ax=ax1, norm_hist=True)
+                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax1, norm_hist=True)
+                sns.distplot(qsb, bins=50, color='r', kde=False, ax=ax1, norm_hist=True)
         
-                sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
-                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
-                sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True, label="s={0}".format(s_in[i]))
+                sns.distplot(qb, color='b', kde=False, ax=ax2, norm_hist=True)
+                sns.distplot(qb_quad , bins=50, color='m',kde=False, ax=ax2, norm_hist=True)
+                sns.distplot(qsb, color='r', kde=False, ax=ax2, norm_hist=True)
 
                 # GOF
                 if do_gof_tests:
-                    sns.distplot(qgofb_true      , color='b', kde=False, ax=ax3, norm_hist=True, label="s={0}".format(s_in[i]))
-                    sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax3, norm_hist=True, label="s={0}".format(s_in[i]))
-                    sns.distplot(qgofb_true      , color='b', kde=False, ax=ax4, norm_hist=True, label="s={0}".format(s_in[i]))
+                    sns.distplot(qgofb_true      , color='b', kde=False, ax=ax3, norm_hist=True)
+                    sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax3, norm_hist=True)
+                    sns.distplot(qgofb_true      , color='b', kde=False, ax=ax4, norm_hist=True)
                     sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax4, norm_hist=True, label="s={0}".format(s_in[i]))
-          
+         
+                # Quad vs MC local p-value comparison
+                # Compute quad p-values by looking up simulated q-values on the MC distribution.
+                # Though in principle could construct test based directly on quad values. Legit
+                # frequentist test if we decide on this procedure in advance and can MC the distribution?
+                # Probably just has a bit less power or something.
+                # Anyway still good to know how similar results are to the full MC result.
+                MCcdf, order = CDFf(qb)
+                print("qb:",qb)
+                print("MCcdf(qb):", MCcdf(qb))
+                fullMCp = -sps.norm.ppf(MCcdf(qb))
+                quadMCp = -sps.norm.ppf(MCcdf(qb_quad))
+
+                ax31 = fig3.add_subplot(nplots,1,i+1)
+                diag = np.min(fullMCp), np.max(fullMCp)
+                print("diag:",diag)
+                ax31.plot(diag,diag,c='k')
+                ax31.scatter(fullMCp,quadMCp,s=1,c='b')
+                ax31.set_xlabel("full MC sigma")
+                ax31.set_ylabel("quad. approx sigma")
+
             # Compute and plot asymptotic distributions!
         
             var_mu_sb = 1./tf.abs(qAsb[i]) 
@@ -250,6 +347,9 @@ if do_mu_tests:
    
         fig.tight_layout()
         fig.savefig("qsb_dists_{0}.png".format(a.name))
+
+        fig3.tight_layout()
+        fig3.savefig("qb_vs_qquad{0}.png".format(a.name))
 
         if do_gof_tests:
             fig2.tight_layout()

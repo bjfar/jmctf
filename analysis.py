@@ -693,10 +693,24 @@ class JMCJoint(tfd.JointDistributionNamed):
     def cat_pars(self,pars):
         """Stack tensorflow parameters in known order"""
         parlist = []
+        maxdims = {}
         for ka,a in pars.items():
             for kp,p in a.items():
                 parlist += [p]
-        return tf.Variable(tf.concat(parlist,axis=-1),name="all_parameters")               
+                i = -1
+                for d in p.shape[::-1]:
+                    if i not in maxdims.keys() or maxdims[i]<d: maxdims[i] = d
+                    i-=1
+        maxshape = [None for i in range(len(maxdims))]
+        for i,d in maxdims.items():
+            maxshape[i] = d
+
+        # Attempt to broadcast all inputs to same shape
+        matched_parlist = []
+        bcast = tf.broadcast_to(tf.constant(np.ones([1 for d in range(len(maxdims))]),dtype=float),maxshape)
+        for p in parlist:
+            matched_parlist += [p*bcast]
+        return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
 
     def uncat_pars(self,catted_pars,pars_template=None):
         """De-stack tensorflow parameters back into separate variables of
