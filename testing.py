@@ -47,10 +47,11 @@ stream.close()
 
 #s_in = [0.2,.5,1.,2.,5.]
 #s_in = [0.1,1.,10.,20.]
-#s_in = [1.,10.,20.,50.]
+s_in = [1.,10.,20.,50.]
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
-#signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
+signal = {a.name: {'s': tf.constant([[s for sr in a.SR_names] for s in s_in], dtype=float)} for a in analyses_read.values()}
 nullnuis = {a.name: {'nuisance': None} for a in analyses_read.values()} # Use to automatically set nuisance parameters to zero for sample generation
+Ns = len(s_in)
 
 # Generate grid of samples for TEST analysis
 def ndim_grid(start,stop,N):
@@ -70,11 +71,15 @@ a = analyses_read["TEST"]
 b     = a.SR_b 
 b_sys = a.SR_b_sys 
 for bi,bsysi in zip(b,b_sys):
-    start += [bi-5*bsysi]
-    stop  += [bi+5*bsysi]
-sgrid = ndim_grid(start,stop,10)
-signal = {"TEST": {'s': tf.constant(sgrid,dtype=float)}}
-Ns = len(sgrid)
+    start += [-4*bsysi]
+    stop  += [+4*bsysi]
+#sgrid = ndim_grid(start,stop,20)
+sigs = np.linspace(-4*bsysi,+4*bsysi,50)
+print("sigs:", sigs)
+#np.random.shuffle(sigs)
+sgrid = tf.expand_dims(tf.constant(sigs,dtype=float),axis=1)
+#signal = {"TEST": {'s': tf.constant(sgrid,dtype=float)}}
+#Ns = len(sgrid)
 
 # ATLAS_13TeV_RJ3L_3Lep_36invfb
 # # best fit signal from MSSMEW analysis, for testing
@@ -159,6 +164,11 @@ if do_mu_tests:
                 #print("nuis_s:", joint.descale_pars(nuis_pars_s))
                 q = qsb - qb # mu=0 distribution
 
+                #Experimental: Fit mu scaling test statistic
+                print("Fitting scale w.r.t background-only samples")
+                qmub, joint_fitted_mub, pars_mub = joint.fit_nuisance_and_scale(signal,samples0,log_tag='qmub')
+                qmu0 = qb - qmub
+
                 # Obtain function to compute neg2logl for fitted samples, for any fixed input signal,
                 # with nuisance parameters analytically profiled out using a second order Taylor expansion
                 # about the GOF best fit points.
@@ -197,14 +207,6 @@ if do_mu_tests:
                 #q_quad = qsb_quad - qb_quad
                 q_quad = qsb_quad - qb # Using quad approx only for signal half. Biased, but maybe better p-value behaviour.
 
-                # Loop over signal hypotheses, get qpdf for each, and get MC'd local-pvalues for all samples
-                MCcdf, order = CDFf(qb)
-                print("qb:",qb)
-                print("MCcdf(qb):", MCcdf(qb))
-                fullMCp = -sps.norm.ppf(MCcdf(qb))
-                quadMCp = -sps.norm.ppf(MCcdf(qb_quad))
-
-
                 print("Fitting w.r.t signal samples")
                 qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
                 qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
@@ -237,6 +239,7 @@ if do_mu_tests:
         fig  = plt.figure(figsize=(12,4*nplots))
         fig2 = plt.figure(figsize=(12,4*nplots))
         fig3 = plt.figure(figsize=(6,4*nplots))
+        fig4 = plt.figure(figsize=(12,4*nplots))
         for i in range(nplots):
             ax1 = fig.add_subplot(nplots,2,2*i+1)
             ax2 = fig.add_subplot(nplots,2,2*i+2)
@@ -246,7 +249,12 @@ if do_mu_tests:
             ax3 = fig2.add_subplot(nplots,2,2*i+1)
             ax4 = fig2.add_subplot(nplots,2,2*i+2)
             ax3.set(yscale="log")
-         
+       
+            # qmu plots
+            ax41 = fig4.add_subplot(nplots,2,2*i+1)
+            ax42 = fig4.add_subplot(nplots,2,2*i+2)
+            ax42.set(yscale="log")
+
             if do_MC:
                 qb  = q[:,i].numpy()
                 qb_quad = q_quad[:,i].numpy()
@@ -271,8 +279,12 @@ if do_mu_tests:
                     sns.distplot(qgofb_true      , color='b', kde=False, ax=ax3, norm_hist=True)
                     sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax3, norm_hist=True)
                     sns.distplot(qgofb_true      , color='b', kde=False, ax=ax4, norm_hist=True)
-                    sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax4, norm_hist=True, label="s={0}".format(s_in[i]))
-         
+                    sns.distplot(qgofsb_true[:,i], color='r', kde=False, ax=ax4, norm_hist=True)
+
+                # qmu
+                sns.distplot(qmu0[:,i], color='b', kde=False, ax=ax41, norm_hist=True)
+                sns.distplot(qmu0[:,i], color='b', kde=False, ax=ax42, norm_hist=True)
+           
                 # Quad vs MC local p-value comparison
                 # Compute quad p-values by looking up simulated q-values on the MC distribution.
                 # Though in principle could construct test based directly on quad values. Legit
@@ -344,6 +356,12 @@ if do_mu_tests:
 
                 ax3.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
                 ax4.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+
+            qx = np.linspace(0, sps.chi2(df=1).ppf(tfd.Normal(0,1).cdf(5.)),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
+            qy = tf.math.exp(tfd.Chi2(df=1).log_prob(qx))
+            sns.lineplot(qx,qy,color='b',ax=ax41)
+            sns.lineplot(qx,qy,color='b',ax=ax42)
+
    
         fig.tight_layout()
         fig.savefig("qsb_dists_{0}.png".format(a.name))
@@ -354,3 +372,7 @@ if do_mu_tests:
         if do_gof_tests:
             fig2.tight_layout()
             fig2.savefig("gof_dists_{0}.png".format(a.name))
+
+        fig4.tight_layout()
+        fig4.savefig("qmu0_dists_{0}.png".format(a.name))
+

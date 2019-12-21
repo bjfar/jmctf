@@ -534,22 +534,23 @@ class ColliderAnalysis:
         #quit()
         return seeds
 
-qtrace = []
-def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars):
+def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     """General -2logL function to optimise"""
-    if const_pars is None:
-        all_pars = pars
+    if transform is not None:
+        pars_t = transform(pars)
     else:
-        all_pars = deep_merge(const_pars,pars)
+        pars_t = pars
+    if const_pars is None:
+        all_pars = pars_t
+    else:
+        all_pars = deep_merge(const_pars,pars_t)
     #print("all_pars:",all_pars)
     joint = JMCJoint(analyses,all_pars,pre_scaled_pars)
     q = -2*joint.log_prob(data)
-    global qtrace
-    qtrace += [q]
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
 
-def optimize(pars,const_pars,analyses,data,pre_scaled_pars,log_tag=''):
+def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_tag=''):
     """Wrapper for optimizer step that skips it if the initial guesses are known
        to be exact MLEs"""
 
@@ -565,7 +566,8 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,log_tag=''):
     kwargs = {'const_pars': const_pars,
               'analyses': analyses,
               'data': data,
-              'pre_scaled_pars': pre_scaled_pars
+              'pre_scaled_pars': pre_scaled_pars,
+              'transform': transform
               }
 
     exact_MLEs = False #True
@@ -580,10 +582,14 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,log_tag=''):
         f = mm.tools.func_partial(neg2LogL,**kwargs)
         q, none, none = mm.optimize(pars, f, **opts)
     # Rebuild distribution object with fitted parameters
-    if const_pars is None:
-        all_pars = pars
+    if transform is not None:
+        pars_t = transform(pars)
     else:
-        all_pars = deep_merge(const_pars,pars)
+        pars_t = pars
+    if const_pars is None:
+        all_pars = pars_t
+    else:
+        all_pars = deep_merge(const_pars,pars_t)
     joint = JMCJoint(analyses,all_pars,pre_scaled_pars)
     return joint, q
 
@@ -683,6 +689,30 @@ class JMCJoint(tfd.JointDistributionNamed):
         joint_fitted, q = optimize(nuis_pars,signal,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag)
         return q, joint_fitted, nuis_pars
 
+    def fit_nuisance_and_scale(self,signal,samples,log_tag=''):
+        """Fit nuisance parameters plus a signal scaling parameter
+           (ignores parameters that were used to construct this object)"""
+        pars = self.get_nuis_parameters(signal,samples)
+        # Signal scaling parameter. One per sample, and per signal input
+        Nsamples = list(samples.values())[0].shape[0]
+        Nsignals = list(list(signal.values())[0].values())[0].shape[0] 
+        muV = tf.Variable(np.ones((Nsamples,Nsignals,1)),dtype=float)
+        # Function to produce signal parameters from mu
+        def mu_to_sig(pars):
+            x = pars['mu']
+            mu = (1 - tf.exp(-2*x))/(2*tf.exp(-x)) # sinh(x); kind of like log, but stretches similarly for negative values. Seems to be pretty good for this.
+            sig_out = {}
+            for ka,a in signal.items():
+                sig_out[ka] = {}
+                for kp,p in a.items():
+                    sig_out[ka][kp] = mu*p
+            nuis_pars = {k:v for k,v in pars.items() if k is not 'mu'}
+            out = deep_merge(nuis_pars,sig_out) # Return all signal and nuisance parameters, but not mu.
+            return out 
+        pars['mu'] = muV # TODO: Not attached to any analysis, but might work anyway  
+        joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag)
+        return q, joint_fitted, pars
+  
     def fit_all(self,samples,log_tag=''):
         """Fit all signal and nuisance parameters to samples
            (ignores parameters that were used to construct this object)"""
