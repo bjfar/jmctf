@@ -1,4 +1,8 @@
 import numpy as np
+import scipy.interpolate as spi
+import scipy.stats as sps
+import matplotlib.pyplot as plt
+import seaborn as sns
 import yaml
 import pandas as pd
 import tensorflow as tf
@@ -11,6 +15,33 @@ class blockseqtrue( list ): pass
 def blockseqtrue_rep(dumper, data):
         return dumper.represent_sequence( u'tag:yaml.org,2002:seq', data, flow_style=True )
 yaml.add_representer(blockseqtrue, blockseqtrue_rep)
+
+def eCDF(x):
+    """Get empirical CDFs of arrays of samples. Assumes first dimension
+       is the sample dimension. All CDFs are the same since number of
+       samples has to be the same"""
+    cdf = tf.constant(np.arange(1, x.shape[0]+1)/float(x.shape[0]),dtype=float)
+    #print("cdf.shape:", cdf.shape)
+    #print("x.shape:", x.shape)
+    return cdf
+    #return tf.broadcast_to(cdf,x.shape)
+
+def CDFf(samples,reverse=False):
+    """Return interpolating function for CDF of some simulated samples"""
+    if reverse:
+        s = np.argsort(samples[np.isfinite(samples)],axis=0)[::-1] 
+    else:
+        s = np.argsort(samples[np.isfinite(samples)],axis=0)
+    ecdf = eCDF(samples[s])
+    CDF = spi.interp1d([-1e99]+list(samples[s])+[1e99],[ecdf[0]]+list(ecdf)+[ecdf[1]])
+    return CDF, s #pvalue may be 1 - CDF(obs), depending on definition/ordering
+
+def gather_by_idx(x,indices):
+    idx = tf.cast(indices,dtype=tf.int32)
+    idx_flattened = tf.range(0, x.shape[0]) * x.shape[1] + idx
+    y = tf.gather(tf.reshape(x, [-1]),  # flatten input
+                  idx_flattened)  # use flattened indices
+    return y
 
 def deep_merge(a, b):
     """
@@ -696,11 +727,10 @@ class JMCJoint(tfd.JointDistributionNamed):
         # Signal scaling parameter. One per sample, and per signal input
         Nsamples = list(samples.values())[0].shape[0]
         Nsignals = list(list(signal.values())[0].values())[0].shape[0] 
-        muV = tf.Variable(np.ones((Nsamples,Nsignals,1)),dtype=float)
+        muV = tf.Variable(np.zeros((Nsamples,Nsignals,1)),dtype=float)
         # Function to produce signal parameters from mu
         def mu_to_sig(pars):
-            x = pars['mu']
-            mu = (1 - tf.exp(-2*x))/(2*tf.exp(-x)) # sinh(x); kind of like log, but stretches similarly for negative values. Seems to be pretty good for this.
+            mu = tf.sinh(pars['mu']) # sinh^-1 is kind of like log, but stretches similarly for negative values. Seems to be pretty good for this.
             sig_out = {}
             for ka,a in signal.items():
                 sig_out[ka] = {}
@@ -908,6 +938,266 @@ class JMCJoint(tfd.JointDistributionNamed):
         joint = JMCJoint(self.analyses,deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
         q = -2*joint.log_prob(samples)
         return q
+
+def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
+    """Compute LEE-corrected p-value to exclude the no-signal hypothesis, with
+       'signal' providing the set of signals to consider for the correction
+       
+       Also computes local p-values for all input signal hypotheses.
+    """
+    nullnuis = {a.name: {'nuisance': None} for a in analyses.values()} # Use to automatically set nuisance parameters to zero for sample generation
+
+    print("Simulating {0}".format(name))
+    
+    # Create joint distributions
+    joint   = JMCJoint(analyses) # Version for fitting (object is left with fitted parameters upon fitting)
+    joint0  = JMCJoint(analyses,deep_merge(nosignal,nullnuis))
+    joint0s = JMCJoint(analyses,deep_merge(signal,nullnuis))
+    
+    # Get Asimov samples for nuisance MLEs with fixed signal hypotheses
+    samplesAb = joint0.Asamples
+    samplesAsb = joint0s.Asamples 
+ 
+    # Get observed data
+    obs_data = joint0.Osamples
+    
+    # Evaluate distributions for Asimov datasets, in case where we
+    # know that the MLEs for those samples are the true parameters
+    qsbAsb = -2*(joint0s.log_prob(samplesAsb))
+    qbAb  = -2*(joint0.log_prob(samplesAb))
+    
+    # Fit distributions for Asimov datasets for the other half of each
+    # likelihood ratio
+    print("Fitting w.r.t Asimov samples")
+    qbAsb, joint_fitted, pars = joint.fit_nuisance(nosignal, samplesAsb,log_tag='bAsb')
+    qsbAb, joint_fitted, pars = joint.fit_nuisance(signal, samplesAb,log_tag='sbAsb')
+  
+    qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
+    qAb = (qsbAb - qbAb)[0]
+    
+    # Generate background-only pseudodata to be fitted
+    samples0 = joint0.sample(N)
+    onesample0 = joint0.sample(1) # For some quick stuff
+     
+    # Generate signal pseudodata to be fitted
+    samples0s = joint0s.sample(N)
+   
+    if fitall:
+        print("Fitting GOF w.r.t background-only samples")
+        qgof_b, joint_gof_fitted_b, gof_pars_b  = joint.fit_all(samples0, log_tag='gof_all_b')
+        #print("Fitting GOF w.r.t signal samples")
+        #qgof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
+
+        print("Fitting w.r.t background-only samples")
+        qb , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
+        qsb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(signal, samples0, log_tag='qsb')
+        q = qsb - qb # mu=0 distribution
+    else:
+        # Only need the no-signal nuisance parameter fits for quadratic approximations
+        print("Fitting no-signal nuisance parameters w.r.t background-only samples")
+        qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
+
+        # Do one full GOF fit just to determine parameter numbers 
+        null, null, gof_pars_b  = joint.fit_all(onesample0)
+
+    # Obtain function to compute neg2logl for fitted samples, for any fixed input signal,
+    # with nuisance parameters analytically profiled out using a second order Taylor expansion
+    # about the GOF best fit points.
+    #print("fitted pars:", gof_pars_b)
+    #f1 = joint_gof_fitted_b.quad_loglike_f(samples0)
+
+    # What if we expand about the no-signal point instead? Just to see...
+    f2 = joint_fitted_b.quad_loglike_f(samples0)
+    # Huh, seems to work way better. I guess it should be better when the test signals are small?
+
+    # Can we combine the two? Weight be inverse square euclidean distance in GOF parameter space?
+    # Something smarter?
+    def combf(signal):
+        p1 = nosignal
+        p2 = gof_pars_b
+        print("p1:", p1)
+        print("p2:", p2)
+        print("signal", signal)
+        dist1_squared = 0
+        dist2_squared = 0
+        for ka,a in signal.items():
+            for pa,p in a.items():
+                dist1_squared += (tf.expand_dims(signal[ka][pa],axis=0) - tf.expand_dims(p1[ka][pa],axis=0))**2 
+                dist2_squared += (tf.expand_dims(signal[ka][pa],axis=0) - p2[ka][pa])**2 
+        w1 = tf.reduce_sum(1./dist1_squared,axis=-1)
+        w2 = tf.reduce_sum(1./dist2_squared,axis=-1)
+        print("w1:", w1)
+        print("w2:", w2)
+        w = w1+w2
+        return (w1/w)*f1(signal) + (w2/w)*f2(signal)
+
+    qsb_quad = f2(signal)
+    #qsb_quad = combf(signal)
+    #qb_quad = f2(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
+    #print("qsb_quad:", qsb_quad)
+    #q_quad = qsb_quad - qb_quad
+    q_quad = qsb_quad - qb # Using quad approx only for signal half. Biased, but maybe better p-value behaviour.
+
+    # print("Fitting w.r.t signal samples")
+    # qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
+    # qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
+    # q_s = qsb_s - qb_s #mu=1 distribution
+
+    print("Determining all local p-value distributions...")
+    #for i in range(q_quad.shape[-1]):
+    #    if (i%1000)==0: print("   {0} of {1}".format(i,q_quad.shape[-1]))
+    #    if fitall: 
+    #        #MCcdf, order = CDFf(q[:,i].numpy())
+    #        #pval = MCcdf(q[:,i])
+    #        pval = eCDF(q[:,i].numpy())
+    #        fullMCp = -sps.norm.ppf(pval)
+    #        plocal     += [pval]
+    #        sigmalocal += [fullMCp]
+    #    #MCcdf_quad, order = CDFf(q_quad[:,i].numpy())
+    #    #pval_quad = MCcdf_quad(q_quad[:,i])
+    #    pval_quad = eCDF(q_quad[:,i].numpy())
+    #    quadMCp = -sps.norm.ppf(pval_quad)
+    #    plocal_quad += [pval_quad]
+    #    sigmalocal_quad += [quadMCp]
+
+    #if fitall: 
+    #    pval = eCDF(tf.sort(q,axis=0))
+    #    fullMCp = -sps.norm.ppf(pval)
+    #    plocal     += [pval]
+    #    sigmalocal += [fullMCp]
+    #    pval = eCDF(tf.sort(q,axis=0))
+    q_quad_sort_i = tf.argsort(q_quad,axis=0)
+    cdf = eCDF(q_quad)
+    # Need to undo the sort to assign p-values back to where they belong
+    unsort_i = tf.argsort(q_quad_sort_i,axis=0)
+    plocal_all_quad     = tf.gather(cdf, unsort_i)
+    sigmalocal_all_quad = -sps.norm.ppf(plocal_all_quad)
+
+    # Select minimum p-values for each sample from across all signal hypotheses (tests)
+    if fitall:
+        #plocal_all     = tf.stack(plocal,axis=-1)
+        #sigmalocal_all = tf.stack(sigmalocal,axis=-1)
+        q_min_i = tf.argmin(q,axis=-1) # "Best fit" hypothesis
+        #sigmalocal_min_i      = tf.argmax(sigmalocal_all,axis=-1) # Could also select based on exclusion of b-only hypothesis. But a bit weird to do that.
+        q_min     = gather_by_idx(q,q_min_i)
+   
+        # Local p-values at selected point
+        plocal_BF          = gather_by_idx(plocal_all,q_min_i).numpy()    
+        sigmalocal_BF      = gather_by_idx(sigmalocal_all,q_min_i).numpy()
+
+    #plocal_all_quad = tf.stack(plocal_quad,axis=-1)
+    #sigmalocal_all_quad = tf.stack(sigmalocal_quad,axis=-1)
+    #sigmalocal_min_quad_i = tf.argmax(sigmalocal_all_quad,axis=-1)
+    q_min_quad_i = tf.argmin(q_quad,axis=-1)
+    qquad_min = gather_by_idx(q_quad,q_min_quad_i) 
+    sigmalocal_B_quad  = gather_by_idx(sigmalocal_all_quad,q_min_quad_i).numpy()
+    plocal_BF_quad     = gather_by_idx(plocal_all_quad,q_min_quad_i).numpy()
+  
+    # GOF distributions
+    if fitall:
+        qgofb_true = qb - qgof_b # Test of b-only when b is true
+        #qgofsb_true = qsb_s - qgof_sb # Test of s when s is true
+        # the above should both be asymptotically chi^2
+    N_gof_pars = sum([par.shape[-1] for a in gof_pars_b.values() for par in a.values()])
+    N_nuis_pars = sum([par.shape[-1] for a in nuis_pars_b.values() for par in a.values()])
+    #print("N_gof_pars:",N_gof_pars)
+    #print("N_nuis_pars:")
+    DOF = N_gof_pars - N_nuis_pars
+
+    # Fit distributions for observed datasets
+    print("Fitting w.r.t observed data")
+    qbO , joint_fitted, pars = joint.fit_nuisance(nosignal, obs_data)
+    qsbO, joint_fitted, pars = joint.fit_nuisance(signal, obs_data)
+    qO = (qsbO - qbO)[0] # extract single sample result
+
+    print("Fitting GOF w.r.t observed data")
+    qgof_obs, joint_fitted, pars  = joint.fit_all(obs_data, log_tag='gof_obs')
+    qgofOb  = qbO - qgof_obs
+    qgofOsb = qsbO - qgof_obs
+    
+    #print("GOF BF pars:", pars)
+
+    # Plots!
+    # First: GOF b-only samples, vs selected lowest p-value
+    #  I think in ideal cases should be the same.
+    fig  = plt.figure(figsize=(12,4))
+    ax1 = fig.add_subplot(1,2,1)
+    ax2 = fig.add_subplot(1,2,2)
+    ax2.set(yscale="log")
+    
+    if fitall:
+        sns.distplot(qgofb_true, color='b', kde=False, ax=ax1, norm_hist=True, label="GOF MC")
+        sns.distplot(qgofb_true, color='b', kde=False, ax=ax2, norm_hist=True, label="GOF MC")
+        sns.distplot(-q_min, color='g', kde=False, ax=ax1, norm_hist=True, label="LEEC")
+        sns.distplot(-q_min, color='g', kde=False, ax=ax2, norm_hist=True, label="LEEC")
+    sns.distplot(-qquad_min, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad")
+    sns.distplot(-qquad_min, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad")
+   
+    qx = np.linspace(0, np.max(-qquad_min),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
+    qy = tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx))
+    sns.lineplot(qx,qy,color='g',ax=ax1, label="asymptotic")
+    sns.lineplot(qx,qy,color='g',ax=ax2, label="asymptotic")
+
+    ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+   
+    fig.tight_layout()
+    fig.savefig("qGOF_dists_v_leeC_{0}.png".format(name))
+
+    if fitall:
+        fig3  = plt.figure(figsize=(6,4))
+        ax31 = fig3.add_subplot(111)
+        diag = np.min(fullMCp), np.max(fullMCp)
+        print("diag:",diag)
+        ax31.plot(diag,diag,c='k')
+        ax31.scatter(fullMCp,quadMCp,s=1,c='b')
+        ax31.set_xlabel("full MC sigma")
+        ax31.set_ylabel("quad. approx sigma")
+        fig3.savefig("qb_vs_qquad_last_{0}.png".format(name))
+
+    # Distribution of local p-value at best-fit point and
+    # local p-value at best-fit point VS LEE corrected p-value
+
+    fig4  = plt.figure(figsize=(12,4))
+    ax1 = fig4.add_subplot(1,2,1)
+    ax2 = fig4.add_subplot(1,2,2)
+    ax1.set(xscale="log")
+    ax1.set(yscale="log")
+
+    if fitall:
+        pcdf,      order = CDFf(plocal_BF)
+        LEEsigma      = -sps.norm.ppf(pcdf(plocal_BF))
+        # Predictions of asymptotic theory (for the full signal parameter space)
+        p_asympt = 1 - sps.chi2(df=DOF).cdf(-q_min)
+        sigma_asympt = -sps.norm.ppf(p_asympt)
+    pcdf_quad, order_quad = CDFf(plocal_BF_quad)
+    LEEsigma_quad = -sps.norm.ppf(pcdf_quad(plocal_BF_quad))
+
+    # BF local p-value distribtuion
+    diag = np.min(plocal_BF_quad), np.max(plocal_BF_quad)
+    ax1.plot(diag,diag,c='k')
+    if fitall:
+        #ax1.plot(plocal_BF[order],p_asympt[order],drawstyle='steps-post',label='Asympt.',c='k',alpha=0.6)
+        ax1.scatter(plocal_BF[order],p_asympt[order],s=1.5,lw=0,label='Asympt.',c='k',alpha=0.6)
+        ax1.plot(plocal_BF[order],pcdf(plocal_BF[order]),drawstyle='steps-post',label='Full MC',c='b')
+    ax1.plot(plocal_BF_quad[order_quad],pcdf_quad(plocal_BF_quad[order_quad]),drawstyle='steps-post',label='Quad approx.',c='m')
+    ax1.set_xlabel("local p-value")
+    ax1.set_ylabel("CDF")
+    ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+ 
+    # BF local sigma vs LEE-corrected sigma (basically same as above, just different scale)
+    diag = np.min(-sps.norm.ppf(plocal_BF_quad)), np.max(-sps.norm.ppf(plocal_BF_quad))
+    ax2.plot(diag,diag,c='k')
+    if fitall:
+        #ax2.plot(-sps.norm.ppf(plocal_BF[order]),sigma_asympt[order],drawstyle='steps-post',label='Asympt.',c='k',alpha=0.6)
+        ax2.scatter(-sps.norm.ppf(plocal_BF[order]),sigma_asympt[order],s=1.5,lw=0,label='Asympt.',c='k',alpha=0.6)
+        ax2.plot(-sps.norm.ppf(plocal_BF[order]),LEEsigma[order],drawstyle='steps-post',label='Full MC',c='b')
+    ax2.plot(-sps.norm.ppf(plocal_BF_quad[order_quad]),LEEsigma_quad[order_quad],drawstyle='steps-post',label='Quad approx.',c='m')
+    ax2.set_xlabel("local sigma")
+    ax2.set_ylabel("global sigma")
+    ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+ 
+    fig4.savefig("local_vs_global_sigma_{0}.png".format(name))
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""

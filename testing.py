@@ -74,7 +74,7 @@ for bi,bsysi in zip(b,b_sys):
     start += [-4*bsysi]
     stop  += [+4*bsysi]
 #sgrid = ndim_grid(start,stop,20)
-sigs = np.linspace(-4*bsysi,+4*bsysi,50)
+sigs = np.linspace(-4*bsysi,+4*bsysi,100)
 print("sigs:", sigs)
 #np.random.shuffle(sigs)
 sgrid = tf.expand_dims(tf.constant(sigs,dtype=float),axis=1)
