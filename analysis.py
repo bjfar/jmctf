@@ -5,10 +5,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import yaml
 import pandas as pd
+import sqlite3
 import tensorflow as tf
 from tensorflow_probability import distributions as tfd
 import massminimize as mm
 import copy
+import pathlib
+import time
 
 # Stuff to help format YAML output
 class blockseqtrue( list ): pass
@@ -236,6 +239,13 @@ class ColliderAnalysis:
         else:
             Osamples["{0}::x".format(self.name)] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=float),0),0)
         return Osamples
+
+    def get_sample_structure(self):
+        """Get a list describing the structure of data samples for this analysis.
+           Basically just the keys of the sample dictionaries plus dimension of each entry"""
+        data = self.get_observed_samples() # Might as well infer it from this data
+        structure = {key.split("::")[1]: val.shape[-1] for key,val in data.items()} # self.name part stripped out of key for brevity 
+        return structure
 
     def get_nuisance_tensorflow_variables(self,sample_dict,signal):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
@@ -1198,6 +1208,258 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
     ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
  
     fig4.savefig("local_vs_global_sigma_{0}.png".format(name))
+
+class LEECorrectorMaster:
+    """A class to wrap up analysis and database access routines to manage LEE corrections
+       for large numbers of analyses, with many signal hypotheses to test, and with many
+       random MC draws. Allows more signal hypotheses and random draws to be added to the
+       simulation without recomputing everything"""
+
+    def __init__(self,analyses,db):
+        self.analyses = analyses
+
+    def add_signals(self,signals):
+        pass
+
+    def add_to_database(self):
+        pass
+
+    def compute_quad(self,data):
+        """Compute quadratic approximations of profile likelihood for a set of
+           data"""
+        pass
+
+def sql_create_table(c,table_name,columns):
+    """Create an SQLite table if it doesn't already exist"""
+    command = "CREATE TABLE IF NOT EXISTS {0} ({1} {2}".format(table_name,columns[0][0],columns[0][1])
+    for col, t in columns[1:]:
+        command += ",{0} {1}".format(col,t)
+    command += ")"  
+    #print("command:",command)
+    c.execute(command)
+
+def sql_upsert(c,table_name,df,primary):
+    """Insert or overwrite data into a set of SQL columns.
+       Data assumed to be a pandas dataframe. Must specify
+       which column contains the primary key.
+    """
+    rec = df.to_records()
+    print("rec:",rec)
+    columns = df.to_records().dtype.names  
+    command = "INSERT INTO {0} ({1}".format(table_name,columns[0])
+    if len(columns)>1:
+        for col in columns[1:]:
+            command += ",{0}".format(col)
+    command += ") VALUES (?"
+    if len(columns)>1:
+        for col in columns[1:]:
+            command += ",?"
+    command += ")"
+    if len(columns)>1:
+        command += " ON CONFLICT({0}) DO UPDATE SET ".format(primary)
+        for j,col in enumerate(columns):
+            if col is not primary:
+                command += "{0}=excluded.{0}".format(col)
+                if j<len(columns)-2: command += ","
+    print("command:", command)
+    c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+ 
+class LEECorrectorAnalysis:
+    """A class to wrap up a SINGLE analysis with connection to output sql database,
+       to be used as part of look-elsewhere correction calculations
+
+       The structure of output is as follows:
+        - 1 master directory for each complete analysis to be performed, containing:
+          - 1 database file per Analysis class, containing:
+            - 1 'master' table assigning IDs (just row numbers) to each 'event', or pseudoexperiment, and recording the data
+            - 1 table synchronised with the 'master' table, containing local test statistic values associated with the (fixed) observed 'best fit' signal point
+              (may add more for other 'special' signal points for which we want local test statistic stuff)
+            - 1 table  "                            "                        test statistic values associated with the combined best fit point for each event
+          - 1 datafiles file for the combination, containing:
+            - 1 table containining combined test statistic values for each event (synchronised with each Analysis file)
+
+        We have to compute test statistic values for *ALL* signal hypotheses to be considered, for every event, however
+        this is too much data to store. So we keep only the 'profiled' test statistic values, i.e. the values extremised
+        over the available signal hypotheses. If more signal hypotheses are added, we can just compare to the already-computed
+        extrema test statistic values for each event to see if they need to be updated.
+    """
+
+    def __init__(self,analysis,path,comb_name,nullsignal):
+        self.event_table = 'events'
+        self.local_tables = ["background"]
+        self.combined_table = comb_name # May vary, so that slightly different combinations can be done side-by-side
+        self.analysis = analysis
+        self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
+        self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis
+        self.nullnuis = {self.analysis.name: {'nuisance': None}} # Use to automatically set nuisance parameters to zero for sample generation
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True) # Ensure output path exists
+        self.db = '{0}/{1}.db'.format(path,self.analysis.name)
+        conn = self.connect_to_db()
+
+        # Columns for pseudodata table
+        self.event_columns = ["EventID"] # ID number for event, used as index for table  
+        for name,dim in self.analysis.get_sample_structure().items():
+           self.event_columns += ["{0}_{1}".format(name,i) for i in range(dim)]
+
+        #print("columns:", self.event_columns)
+
+        c = conn.cursor()
+        cols = [("EventID", "integer primary key")]
+        cols += [(col, "real") for col in self.event_columns[1:]]
+        sql_create_table(c,self.event_table,cols) 
+        self.check_table(c,self.event_table,self.event_columns)   
+        
+        # Create tables for storing local and combined test statistic data
+        test_stat_cols = [("EventID", "integer primary key")]
+        test_stat_cols += [(col, "real") for col in ["neg2logL", "neg2logL_quad"]] # Replaced: split into different tables. ["qb","qsb","q","qsb_quad","q_quad"]]
+        colnames = [x[0] for x in test_stat_cols]
+        for table in self.local_tables+[self.combined_table]:
+            sql_create_table(c,table,test_stat_cols) 
+            self.check_table(c,table,colnames)
+
+        self.close_db(conn)
+
+    def connect_to_db(self):
+        conn = sqlite3.connect(self.db) 
+        return conn
+
+    def close_db(self,conn):
+        conn.commit()
+        conn.close()
+
+    def check_table(self,c,table,required_cols):
+        # Print the columns already existing in our table
+        c.execute('PRAGMA table_info({0})'.format(table))
+        results = c.fetchall()
+        existing_cols = [row[1] for row in results]
+
+        # Check if they match the required columns
+        if existing_cols != required_cols:
+            msg = "Existing table '{0}' for analyis {1} does not contain the expected columns! May have been created with a different version of this code. Please delete it to recreate the table from scratch.\nExpected columns: {2}\nActual columns:{3}".format(table,self.analysis.name,required_cols,existing_cols)
+            raise ValueError(msg) 
+
+    def add_events(self,signal,N):
+        """Add N new events generated under 'signal' to the event table"""
+        print("Recording {0} new events...".format(N))
+        start = time.time()
+        joint = JMCJoint(self.analyses,deep_merge(signal,self.nullnuis))
+
+        # Generate pseudodata
+        samples = joint.sample(N)
+
+        # Save events to database
+        conn = self.connect_to_db()
+        c = conn.cursor()
+   
+        structure = self.analysis.get_sample_structure() 
+        
+        command = "INSERT INTO 'events' ("
+        for name, size in structure.items():
+            for j in range(size):
+                command += "'{0}_{1}',".format(name,j)
+        command = command[:-1] # remove trailing comma
+        command += ") VALUES ("
+        for name, size in structure.items():
+            for j in range(size):
+                command += "?," # Data provided as second argument to 'execute'
+        command = command[:-1] # remove trailing comma
+        command += ")"         
+            
+        # Paste together data tables
+        datalist = []
+        for name, size in structure.items():
+            datalist += [tf.squeeze(samples[self.analysis.name+"::"+name],axis=1)] # Remove 'signal' dimension, should be size 1 (TODO: add check for this)
+         
+        datatable = tf.concat(datalist,axis=-1).numpy()
+
+        c.executemany(command,  map(tuple, datatable.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+        self.close_db(conn)
+        end = time.time()
+        print("Took {0} seconds".format(end-start))
+
+    def load_events(self,N,reftable,condition,offset=0):
+        """Loads N events from database where 'condition' is true in 'reftable'
+           To skip rows, set 'offset' to the first row to be considered."""
+        structure = self.analysis.get_sample_structure() 
+        conn = self.connect_to_db()
+        c = conn.cursor()
+
+        # First see if any data is in the reference table yet:
+        c.execute("SELECT Count(EventID) FROM "+reftable)
+        results = c.fetchall()
+
+        nrows = results[0][0]
+        command = "SELECT A.EventID"
+        for name, size in structure.items():
+            for j in range(size):
+                command += ",A.{0}_{1}".format(name,j)
+
+        command += " from events as A"        
+        if nrows!=0:
+           # Apply extra condition to get only events where "neg2LogL" column is NULL (or the EventID doesn't exist) in the 'background' table
+           command += """
+                      left outer join {0} as B
+                          on A.EventID=B.EventID
+                      where
+                          B.{1} 
+                      """.format(reftable,condition)
+        command += " LIMIT {0} OFFSET {1}".format(N,offset)
+        c.execute(command)
+        results = c.fetchall()
+        self.close_db(conn) 
+
+        if len(results)>0:
+            # Convert back into dictionary of tensorflow tensors
+            # Start by converting to one big tensor
+            alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+ 
+            EventIDs = tf.cast(tf.round(alldata[:,0]),dtype=tf.int32) # TODO: is this safe?
+            i = 1;
+            events = {}
+            for name, size in structure.items():
+                subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                i+=size
+                events[self.analysis.name+"::"+name] = subevents
+
+            print("Retreived eventIDs {0} to {1}".format(np.min(EventIDs.numpy()),np.max(EventIDs.numpy())))
+        else:
+            EventIDs = None
+            events = None
+        return EventIDs, events
+
+    def process_signals(self,signals):
+        pass        
+
+    def process_background(self):
+        """Compute background-only fits for events currently in our output tables
+           But only for events where this hasn't already been done."""
+
+        joint = JMCJoint(self.analyses)
+
+        batch_size = 10000
+        continue_processing = True
+        while continue_processing:
+            EventIDs, events = self.load_events(batch_size,'background','neg2logL is NULL')
+            if EventIDs is None:
+                # No events left to process
+                continue_processing = False
+            if continue_processing:
+                print("Fitting w.r.t background-only samples")
+                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(self.nullsignal, events, log_tag='qb')
+                print("qb:",qb)
+                # next: write to output database
+                # Join event IDs with qb; convenient to use pandas for this
+                data = pd.DataFrame(qb.numpy(),index=EventIDs.numpy(),columns=["neg2logL"])
+                data.index.name = 'EventID' 
+                conn = self.connect_to_db()
+                c = conn.cursor()
+                sql_upsert(c,'background',data,primary='EventID')
+                self.close_db(conn)
+
+    def compute_quad(self,data):
+        """Compute quadratic approximations of profile likelihood for a set of
+           data"""
+        pass
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
