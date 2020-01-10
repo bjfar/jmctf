@@ -2,7 +2,14 @@ TEST:
   Signal regions:
   - [SR0, 520, 500, 100] 
   - [SR1, 295, 300, 30] 
-  - [SR2, 130, 100, 10] 
+  #- [SR0, 4, 5, 1] 
+  #- [SR1, 5, 5, 1] 
+  Type: Poisson_with_Multinormal_Nuisance
+  unlisted_corr_zero: true
+TEST2:
+  Signal regions:
+  - [SR0, 620, 600, 100] 
+  #- [SR2, 130, 100, 10] 
   #- [SR0, 4, 5, 1] 
   #- [SR1, 5, 5, 1] 
   Type: Poisson_with_Multinormal_Nuisance

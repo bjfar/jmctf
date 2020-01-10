@@ -241,11 +241,16 @@ class ColliderAnalysis:
         return Osamples
 
     def get_sample_structure(self):
-        """Get a list describing the structure of data samples for this analysis.
+        """Get a dictionary describing the structure of data samples for this analysis.
            Basically just the keys of the sample dictionaries plus dimension of each entry"""
         data = self.get_observed_samples() # Might as well infer it from this data
         structure = {key.split("::")[1]: val.shape[-1] for key,val in data.items()} # self.name part stripped out of key for brevity 
         return structure
+
+    def get_nuisance_parameter_structure(self):
+        """Get a dictionary describing the nuisance parameter structure of this analysis.
+           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+        return {"theta": len(self.SR_b)} # Just one nuisance parameter per signal region, packaged into one tensor. 
 
     def get_nuisance_tensorflow_variables(self,sample_dict,signal):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
@@ -1260,7 +1265,7 @@ def sql_upsert(c,table_name,df,primary):
         for j,col in enumerate(columns):
             if col is not primary:
                 command += "{0}=excluded.{0}".format(col)
-                if j<len(columns)-2: command += ","
+                if j<len(columns)-1: command += ","
     print("command:", command)
     c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
  
@@ -1286,7 +1291,7 @@ class LEECorrectorAnalysis:
 
     def __init__(self,analysis,path,comb_name,nullsignal):
         self.event_table = 'events'
-        self.local_tables = ["background"]
+        self.background_table = 'background'
         self.combined_table = comb_name # May vary, so that slightly different combinations can be done side-by-side
         self.analysis = analysis
         self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
@@ -1294,6 +1299,7 @@ class LEECorrectorAnalysis:
         self.nullnuis = {self.analysis.name: {'nuisance': None}} # Use to automatically set nuisance parameters to zero for sample generation
         pathlib.Path(path).mkdir(parents=True, exist_ok=True) # Ensure output path exists
         self.db = '{0}/{1}.db'.format(path,self.analysis.name)
+        self.joint = JMCJoint(self.analyses)
         conn = self.connect_to_db()
 
         # Columns for pseudodata table
@@ -1307,15 +1313,30 @@ class LEECorrectorAnalysis:
         cols = [("EventID", "integer primary key")]
         cols += [(col, "real") for col in self.event_columns[1:]]
         sql_create_table(c,self.event_table,cols) 
-        self.check_table(c,self.event_table,self.event_columns)   
-        
-        # Create tables for storing local and combined test statistic data
+        self.check_table(c,self.event_table,self.event_columns)
+       
+        # Table for background-only fit data
         test_stat_cols = [("EventID", "integer primary key")]
-        test_stat_cols += [(col, "real") for col in ["neg2logL", "neg2logL_quad"]] # Replaced: split into different tables. ["qb","qsb","q","qsb_quad","q_quad"]]
+        test_stat_cols += [(col, "real") for col in ["neg2logL"]]
         colnames = [x[0] for x in test_stat_cols]
-        for table in self.local_tables+[self.combined_table]:
-            sql_create_table(c,table,test_stat_cols) 
-            self.check_table(c,table,colnames)
+ 
+        # Will also need nuisance parameter fit values:
+        nuis_cols = []
+        nuis_structure = self.analysis.get_nuisance_parameter_structure()
+        for par,size in nuis_structure.items():
+            for i in range(size):
+                nuis_cols += [("{0}_{1}".format(par,i), "real")]
+
+        bg_cols = test_stat_cols + nuis_cols
+        bg_colnames = [x[0] for x in bg_cols]
+        sql_create_table(c,self.background_table,bg_cols) 
+        self.check_table(c,self.background_table,bg_colnames)
+
+        # Table for best-fit (combined) signal model fit data
+        comb_cols = test_stat_cols + [("neg2logL_quad", "real")]
+        comb_colnames = [x[0] for x in comb_cols]
+        sql_create_table(c,self.combined_table,comb_cols) 
+        self.check_table(c,self.combined_table,comb_colnames)
 
         self.close_db(conn)
 
@@ -1427,8 +1448,68 @@ class LEECorrectorAnalysis:
             events = None
         return EventIDs, events
 
-    def process_signals(self,signals):
-        pass        
+    def load_eventIDs(self,eventIDs):
+        """Loads events with the given eventIDs"""
+        structure = self.analysis.get_sample_structure() 
+        conn = self.connect_to_db()
+        c = conn.cursor()
+
+        nrows = results[0][0]
+        command = "SELECT "
+        for name, size in structure.items():
+            for j in range(size):
+                command += "A.{0}_{1},".format(name,j)
+        command = command[:-1]
+        command += " from events"
+
+        c.execute(command)
+        results = c.fetchall()
+        self.close_db(conn) 
+
+        if len(results)>0:
+            # Convert back into dictionary of tensorflow tensors
+            # Start by converting to one big tensor
+            alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+            i = 0;
+            events = {}
+            for name, size in structure.items():
+                subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                i+=size
+                events[self.analysis.name+"::"+name] = subevents
+        else:
+            events = None
+        return events
+
+    def load_bg_nuis_pars(self,EventIDs):
+        """Loads fitted background-only nuisance parameter values for the selected
+           events"""
+        pass
+
+    def fit_signal_batch(self,events,signals):
+        """Compute signal fits for selected eventIDs
+           Returns test statistic values for combination
+           with other analyses. No results recorded; this
+           needs to be request in a separate step by the calling
+           code, by running 'record_bf_signal_stats'
+        """
+        # Run full numerical fits of nuisance parameters for all signal hypotheses
+        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(signals, events, log_tag='qsb')
+        return qsb
+
+        # Estimate profile likelihood using quadratic approximation in generalised signal parameter space.
+        f2 = joint_fitted_b.quad_loglike_f(events)
+        #qsb_quad = f2(signals) # calling code can do this themselves, and thus only call this function once per batch of events, however many signals there are to consider. Saves re-doing the matrix calculations associated with computing the quadratic approximation.
+
+        return qsb, f2
+
+    def compute_quad(self,events):
+        """Compute quadratic approximations of profile likelihood for the specified
+           set of events"""
+        f2 = joint_fitted_b.quad_loglike_f(events)
+        pass
+
+    def record_bf_signal_stats(self):
+        pass
 
     def process_background(self):
         """Compute background-only fits for events currently in our output tables
@@ -1446,20 +1527,21 @@ class LEECorrectorAnalysis:
             if continue_processing:
                 print("Fitting w.r.t background-only samples")
                 qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(self.nullsignal, events, log_tag='qb')
-                print("qb:",qb)
-                # next: write to output database
-                # Join event IDs with qb; convenient to use pandas for this
-                data = pd.DataFrame(qb.numpy(),index=EventIDs.numpy(),columns=["neg2logL"])
+                # Write events to output database               
+                # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
+                arrays = [qb]
+                cols = ["neg2logL"]
+                for par, arr in nuis_pars_b[self.analysis.name].items():
+                    for i in range(arr.shape[-1]):
+                        cols += ["{0}_{1}".format(par,i)]
+                    arrays += [tf.squeeze(arr,axis=1)] # remove 'signal' dimension
+                allpars = tf.concat(arrays,axis=-1)               
+                data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
                 data.index.name = 'EventID' 
                 conn = self.connect_to_db()
                 c = conn.cursor()
                 sql_upsert(c,'background',data,primary='EventID')
                 self.close_db(conn)
-
-    def compute_quad(self,data):
-        """Compute quadratic approximations of profile likelihood for a set of
-           data"""
-        pass
 
 def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     """Read long format YAML file of analysis data into ColliderAnalysis objects"""
