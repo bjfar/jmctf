@@ -577,7 +577,6 @@ class ColliderAnalysis:
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
             seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i] # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
         #print("seeds:", seeds)
-        #quit()
         return seeds
 
 def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
@@ -1280,14 +1279,20 @@ def sql_load(c,table_name,keys,primary,cols):
     splitdata = np.split(keys, np.where(np.diff(keys) != 1)[0]+1)
     ranges = [(np.min(x), np.max(x)) for x in splitdata]
 
+    # Check columns
+    #c.execute('PRAGMA table_info({0})'.format(table_name))
+    #results = c.fetchall()
+    #print("cols: ", results)
+
     command = "SELECT "
     for col in cols:
-        command += cols+","
+        command += col+","
     command = command[:-1]
-    command += " from events WHERE "
+    command += " from {0} WHERE ".format(table_name)
     for i,(start, stop) in enumerate(ranges):
         command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
         if i<len(ranges)-1: command += " OR "
+    print("command:", command)
     c.execute(command)
     return c.fetchall() 
  
@@ -1473,18 +1478,14 @@ class LEECorrectorAnalysis:
     def load_eventIDs(self,EventIDs):
         """Loads events with the given eventIDs"""
         structure = self.analysis.get_sample_structure() 
-        conn = self.connect_to_db()
-        c = conn.cursor()
- 
         cols = []
         for name, size in structure.items():
             for j in range(size):
                 cols += ["{0}_{1}".format(name,j)]
 
+        conn = self.connect_to_db()
+        c = conn.cursor()
         results = sql_load(c,'events',EventIDs,'EventID',cols)
-
-        c.execute(command)
-        results = c.fetchall()
         self.close_db(conn) 
 
         if len(results)>0:
@@ -1512,24 +1513,23 @@ class LEECorrectorAnalysis:
 
         conn = self.connect_to_db()
         c = conn.cursor()
-
         results = sql_load(c,'background',EventIDs,'EventID',cols)
-        print("bg_pars:", results)
+        self.close_db(conn) 
 
-        # TODO: convert back to tensor
-        # if len(results)>0:
-        #     # Convert back into dictionary of tensorflow tensors
-        #     # Start by converting to one big tensor
-        #     alldata = tf.convert_to_tensor(results, dtype=tf.float32)
-        #     i = 0;
-        #     events = {}
-        #     for name, size in structure.items():
-        #         subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
-        #         i+=size
-        #         events[self.analysis.name+"::"+name] = subevents
-        # else:
-        #     events = None
-        # return events
+        # Convert back to dict of tensors
+        if len(results)>0:
+            # Convert back into dictionary of tensorflow tensors
+            # Start by converting to one big tensor
+            alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+            i = 0
+            pars = {}
+            for par,size in nuis_structure.items():
+                pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                i+=size
+            nuis_pars = {self.analysis.name: pars}
+        else:
+            nuis_pars = None
+        return nuis_pars
 
     def fit_signal_batch(self,events,signals):
         """Compute signal fits for selected eventIDs
@@ -1548,11 +1548,13 @@ class LEECorrectorAnalysis:
 
         return qsb, f2
 
-    def compute_quad(self,events):
+    def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
-           set of events"""
-        f2 = joint_fitted_b.quad_loglike_f(events)
-        pass
+           set of events, expanding around the supplied nuisance parameter point with
+           the null signal"""
+        joint_fitted_b = JMCJoint(self.analyses,deep_merge(self.nullsignal,pars))
+        quadf = joint_fitted_b.quad_loglike_f(events)
+        return quadf 
 
     def record_bf_signal_stats(self):
         pass
@@ -1573,6 +1575,7 @@ class LEECorrectorAnalysis:
             if continue_processing:
                 print("Fitting w.r.t background-only samples")
                 qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(self.nullsignal, events, log_tag='qb')
+                print("nuis_pars_b:", nuis_pars_b)
                 # Write events to output database               
                 # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
                 arrays = [qb]

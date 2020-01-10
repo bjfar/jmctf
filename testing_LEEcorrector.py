@@ -63,3 +63,31 @@ for a in analyses_read.values():
     lee = LEECorrectorAnalysis(a,'TEST','combined',this_nosig)
     lee.add_events(this_nosig,int(1e4))
     lee.process_background()
+    still_processing = True
+    max_neg2logLs = None
+    while still_processing:
+        EventIDs, events = lee.load_events(100,'combined','neg2logL is NULL')
+        if EventIDs is None: still_processing = False
+        if still_processing:
+            pars = lee.load_bg_nuis_pars(EventIDs)
+            quadf = lee.compute_quad(pars,events)
+            Nchunk = 100 # do for 100 signals at a time
+            Nbatches = Ns // Nchunk
+            rem = Ns % Nchunk
+            if rem!=0: Nbatches+=1
+            j=0
+            for i in range(Nbatches):
+                if rem!=0 and i==Nbatches: size = rem
+                else: size = Nchunk
+                sig_chunk = {a.name: {par: dat[j:j+size] for par,dat in signal[a.name].items()}}
+                j += size  
+                neg2logLs = quadf(sig_chunk)
+                #print("sig_chunk:", sig_chunk)
+                # Select the maximum from across all signal hypotheses
+                if max_neg2logLs is not None:
+                    all_neg2logLs = tf.concat([tf.expand_dims(max_neg2logLs,axis=-1),neg2logLs],axis=-1)
+                else:
+                    all_neg2logLs = neg2logLs
+                max_neg2logLs = tf.reduce_max(all_neg2logLs,axis=-1)
+                # TODO: This is only maximising the neg2logL for one analysis. Actually need to combine with all analyses, and THEN take max. But need
+                # to improve structure for this.
