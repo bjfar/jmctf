@@ -1268,6 +1268,28 @@ def sql_upsert(c,table_name,df,primary):
                 if j<len(columns)-1: command += ","
     print("command:", command)
     c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+
+def sql_load(c,table_name,keys,primary,cols):
+    """Load data from an sql table
+       with simple selection of items by primary key values.
+       Compressed primary key values into a set of ranges to
+       construct more efficient queries.
+       Assumes the primary key values are supplied 
+       in ascending order."""
+
+    splitdata = np.split(keys, np.where(np.diff(keys) != 1)[0]+1)
+    ranges = [(np.min(x), np.max(x)) for x in splitdata]
+
+    command = "SELECT "
+    for col in cols:
+        command += cols+","
+    command = command[:-1]
+    command += " from events WHERE "
+    for i,(start, stop) in enumerate(ranges):
+        command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
+        if i<len(ranges)-1: command += " OR "
+    c.execute(command)
+    return c.fetchall() 
  
 class LEECorrectorAnalysis:
     """A class to wrap up a SINGLE analysis with connection to output sql database,
@@ -1448,19 +1470,18 @@ class LEECorrectorAnalysis:
             events = None
         return EventIDs, events
 
-    def load_eventIDs(self,eventIDs):
+    def load_eventIDs(self,EventIDs):
         """Loads events with the given eventIDs"""
         structure = self.analysis.get_sample_structure() 
         conn = self.connect_to_db()
         c = conn.cursor()
-
-        nrows = results[0][0]
-        command = "SELECT "
+ 
+        cols = []
         for name, size in structure.items():
             for j in range(size):
-                command += "A.{0}_{1},".format(name,j)
-        command = command[:-1]
-        command += " from events"
+                cols += ["{0}_{1}".format(name,j)]
+
+        results = sql_load(c,'events',EventIDs,'EventID',cols)
 
         c.execute(command)
         results = c.fetchall()
@@ -1483,7 +1504,32 @@ class LEECorrectorAnalysis:
     def load_bg_nuis_pars(self,EventIDs):
         """Loads fitted background-only nuisance parameter values for the selected
            events"""
-        pass
+        nuis_structure = self.analysis.get_nuisance_parameter_structure()
+        cols = []
+        for par,size in nuis_structure.items():
+            for i in range(size):
+                cols += ["{0}_{1}".format(par,i)]
+
+        conn = self.connect_to_db()
+        c = conn.cursor()
+
+        results = sql_load(c,'background',EventIDs,'EventID',cols)
+        print("bg_pars:", results)
+
+        # TODO: convert back to tensor
+        # if len(results)>0:
+        #     # Convert back into dictionary of tensorflow tensors
+        #     # Start by converting to one big tensor
+        #     alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+        #     i = 0;
+        #     events = {}
+        #     for name, size in structure.items():
+        #         subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+        #         i+=size
+        #         events[self.analysis.name+"::"+name] = subevents
+        # else:
+        #     events = None
+        # return events
 
     def fit_signal_batch(self,events,signals):
         """Compute signal fits for selected eventIDs
