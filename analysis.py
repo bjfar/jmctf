@@ -1219,8 +1219,62 @@ class LEECorrectorMaster:
        random MC draws. Allows more signal hypotheses and random draws to be added to the
        simulation without recomputing everything"""
 
-    def __init__(self,analyses,db):
-        self.analyses = analyses
+    def __init__(self,analyses,path,master_name,nullsignals):
+        self.LEEanalyses = {}
+        self.combined_table = 'combined'
+        self.db = '{0}/{1}_{2}.db'.format(path,master_name,'combined') 
+        for name,a in analyses.items():
+            self.LEEanalyses[name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]})
+
+        # Table for recording final best-fit test statistic results
+        comb_cols = [ ("EventID", "integer primary key")
+                     ,("neg2logL", "real")
+                     ,("neg2logL_quad", "real")]
+        colnames = [x[0] for x in comb_cols]
+
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        sql_create_table(c,self.combined_table,comb_cols)
+        self.close_db(conn)
+
+    def connect_to_db(self):
+        conn = sqlite3.connect(self.db) 
+        return conn
+
+    def close_db(self,conn):
+        conn.commit()
+        conn.close()
+
+    def add_events(self,signals,N):
+        """Generate pseudodata for all analyses under the supplied signal hypothesis"""
+        for name,a in self.LEEanalyses.items():
+            a.add_events({name: signals[name]},N)
+
+        # Record the eventIDs in the combined database as well
+        # Do this by just inserting null data and letting the EventID column auto-increment
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        command = "INSERT INTO {0} (neg2logL) VALUES (?)".format(self.combined_table)
+        nullvals = [(None,)]*N           
+        c.executemany(command,  nullvals) 
+        self.close_db(conn)
+
+    def process_background(self):
+        """Perform background-only fits for all events where it hasn't already been done"""
+        for name,a in self.LEEanalyses.items():
+            a.process_background()
+    
+    def process_signals(self,signals,quad_only=True,new_events_only=False):
+        """Perform fits for all supplied signal hypotheses, for all events in the database,
+           and record the best-fit signal for each event. Compares to any existing best-fits
+           in the database and updates if the new best-fit is better.
+           If 'new_events_only' is true, fits are only performed for events in the database
+           for which no signal fit results are yet recorded."""
+        event_batch_size = 100 # TODO: compute reasonable size for this depending on number of signals to consider
+        still_processing = True
+        while still_processing:
+            EventIDs = lee.load_events(event_batch_size,'combined','neg2logL is NULL')
+
 
     def add_signals(self,signals):
         pass
@@ -1319,7 +1373,7 @@ class LEECorrectorAnalysis:
     def __init__(self,analysis,path,comb_name,nullsignal):
         self.event_table = 'events'
         self.background_table = 'background'
-        self.combined_table = comb_name # May vary, so that slightly different combinations can be done side-by-side
+        self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
         self.analysis = analysis
         self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
         self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis

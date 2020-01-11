@@ -1,6 +1,6 @@
 """Testing LEEcorrector objects"""
 
-from analysis import collider_analyses_from_long_YAML, JMCJoint, deep_merge, LEEcorrection, LEECorrectorAnalysis
+from analysis import collider_analyses_from_long_YAML, JMCJoint, deep_merge, LEEcorrection, LEECorrectorAnalysis, LEECorrectorMaster
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -57,6 +57,11 @@ def get_grid(analyses,N):
 Ns, signal = get_grid(analyses_read,10) # For testing only! Will die if used for more than e.g. 3 total SRs.
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
+
+lee = LEECorrectorMaster(analyses_read,'TEST','all',nosignal)
+lee.add_events(nosignal,int(1e4))
+    
+quit()
 
 for a in analyses_read.values():
     this_nosig = {a.name: nosignal[a.name]}
