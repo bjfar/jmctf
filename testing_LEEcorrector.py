@@ -54,13 +54,16 @@ def get_grid(analyses,N):
     Ns = len(sgrid)
     return Ns, signal
 
-Ns, signal = get_grid(analyses_read,10) # For testing only! Will die if used for more than e.g. 3 total SRs.
+Ns, signals = get_grid(analyses_read,10) # For testing only! Will die if used for more than e.g. 3 total SRs.
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 
 lee = LEECorrectorMaster(analyses_read,'TEST','all',nosignal)
+lee.ensure_equal_events(nosignal)
 lee.add_events(nosignal,int(1e4))
-    
+lee.process_background()
+lee.process_signals(signals,new_events_only=True)
+     
 quit()
 
 for a in analyses_read.values():

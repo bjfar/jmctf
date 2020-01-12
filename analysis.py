@@ -1249,8 +1249,11 @@ class LEECorrectorMaster:
         """Generate pseudodata for all analyses under the supplied signal hypothesis"""
         for name,a in self.LEEanalyses.items():
             a.add_events({name: signals[name]},N)
-
         # Record the eventIDs in the combined database as well
+        self.add_events_comb(N)
+
+    def add_events_comb(self,N):
+        """Record existence of events in the combined table"""
         # Do this by just inserting null data and letting the EventID column auto-increment
         conn = self.connect_to_db()
         c = conn.cursor()
@@ -1270,11 +1273,127 @@ class LEECorrectorMaster:
            in the database and updates if the new best-fit is better.
            If 'new_events_only' is true, fits are only performed for events in the database
            for which no signal fit results are yet recorded."""
-        event_batch_size = 100 # TODO: compute reasonable size for this depending on number of signals to consider
+        Ns = None # figure out how many signal hypotheses we are dealing with
+        for a,sigs in signals.items():
+            for par,dat in sigs.items():
+                thisNs = dat.shape[0]
+                if Ns is None: Ns = thisNs
+                elif Ns!=thisNs: raise ValueError("Incompatibility in signal numbers detected! The same number of signal hypotheses needs to be supplied for all analyses") 
+
+        Nevents = self.count_events_comb()
+        event_batch_size = 10000 # TODO: compute reasonable size for this depending on number of signals to consider
         still_processing = True
         while still_processing:
-            EventIDs = lee.load_events(event_batch_size,'combined','neg2logL is NULL')
+            if new_events_only:
+                EventIDs = self.load_eventIDs(event_batch_size,'combined','neg2logL_quad is NULL')
+            else:
+                raise RuntimeError("Haven't implemented comparison with existing neg2logLs yet!!!") # TODO: add this 
+            if EventIDs is None: still_processing = False
+            if still_processing:
+                quads = []
+                for name,a in self.LEEanalyses.items():
+                    pars = a.load_bg_nuis_pars(EventIDs)
+                    if pars is None:
+                        raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all background fits been done?")
+                    events = a.load_events(EventIDs)
+                    quads += [a.compute_quad(pars,events)]
+                Nchunk = 100 # do for 100 signals at a time
+                Nbatches = Ns // Nchunk
+                rem = Ns % Nchunk
+                if rem!=0: Nbatches+=1
+                j=0
+                max_neg2logLs = None
+                for i in range(Nbatches):
+                    if rem!=0 and i==Nbatches: size = rem
+                    else: size = Nchunk
+                    comb_neg2logLs = None
+                    for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
+                        sig_chunk = {name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+                        neg2logLs = quad(sig_chunk)
+                        if comb_neg2logLs is None:
+                            comb_neg2logLs = neg2logLs
+                        else:
+                            comb_neg2logLs += neg2logLs
 
+                    #print("sig_chunk:", sig_chunk)
+                    # Select the maximum from across all signal hypotheses
+                    if max_neg2logLs is not None:
+                        all_neg2logLs = tf.concat([tf.expand_dims(max_neg2logLs,axis=-1),comb_neg2logLs],axis=-1)
+                    else:
+                        all_neg2logLs = comb_neg2logLs
+                    max_neg2logLs = tf.reduce_max(all_neg2logLs,axis=-1)
+                    j += size 
+ 
+                # Write the compute max_neg2logLs to disk for this batch of events
+                data = pd.DataFrame(max_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_quad'])
+                data.index.name = 'EventID' 
+ 
+                conn = self.connect_to_db()
+                c = conn.cursor()
+                sql_upsert(c,'combined',data,'EventID')
+                self.close_db(conn)
+
+ 
+    def load_eventIDs(self,N,reftable,condition,offset=0):
+        """Loads eventIDs from database where 'condition' is true in 'reftable'
+           To skip rows, set 'offset' to the first row to be considered."""
+        conn = self.connect_to_db()
+        c = conn.cursor()
+
+        # First see if any data is in the reference table yet:
+        c.execute("SELECT Count(EventID) FROM "+reftable)
+        results = c.fetchall()
+
+        nrows = results[0][0]
+        command = "SELECT A.EventID from {0} as A".format(self.combined_table)        
+        if nrows!=0:
+           # Apply extra condition to get e.g. only events where "neg2LogL" column is NULL (or the EventID doesn't exist) in the 'background' table
+           command += """
+                      left outer join {0} as B
+                          on A.EventID=B.EventID
+                      where
+                          B.{1} 
+                      """.format(reftable,condition)
+        command += " LIMIT {0} OFFSET {1}".format(N,offset)
+        c.execute(command)
+        results = c.fetchall()
+        self.close_db(conn) 
+
+        if len(results)>0:
+            # Convert back into dictionary of tensorflow tensors
+            # Start by converting to one big tensor
+            EventIDs = tf.squeeze(tf.convert_to_tensor(results, dtype=tf.int32))
+        else:
+            EventIDs = None
+        return EventIDs 
+
+    def count_events_comb(self):
+        """Count number of rows in the combined output table.
+           Should be equal to max(EventID)+1 since we
+           don't ever delete events."""
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM {0}".format(self.combined_table))
+        results = c.fetchall()
+        self.close_db(conn) 
+        return results[0][0]
+
+    def ensure_equal_events(self,signals):
+        """Generate events in all analyses as needed for them to all have the same
+           number of events. Should only be needed in case run was aborted mid-way or
+           a file has been deleted or some such. Or if say a new analysis has been added."""
+        N = []
+        for name,a in self.LEEanalyses.items():
+            N += [a.count_events()]
+
+        # Now the combined table.
+        combN = self.count_events_comb()
+        maxN = max(N+[combN])
+
+        for Ni,(name,a) in zip(N,self.LEEanalyses.items()):
+            if Ni<maxN: a.add_events({name: signals[name]},maxN-Ni)   
+
+        if combN<maxN: self.add_events_comb(maxN-combN)
 
     def add_signals(self,signals):
         pass
@@ -1479,7 +1598,7 @@ class LEECorrectorAnalysis:
         end = time.time()
         print("Took {0} seconds".format(end-start))
 
-    def load_events(self,N,reftable,condition,offset=0):
+    def load_N_events(self,N,reftable,condition,offset=0):
         """Loads N events from database where 'condition' is true in 'reftable'
            To skip rows, set 'offset' to the first row to be considered."""
         structure = self.analysis.get_sample_structure() 
@@ -1529,7 +1648,18 @@ class LEECorrectorAnalysis:
             events = None
         return EventIDs, events
 
-    def load_eventIDs(self,EventIDs):
+    def count_events(self):
+        """Count number of rows in the event table.
+           Should be equal to max(EventID)+1 since we
+           don't ever delete events."""
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM {0}".format(self.event_table))
+        results = c.fetchall()
+        self.close_db(conn) 
+        return results[0][0]
+
+    def load_events(self,EventIDs):
         """Loads events with the given eventIDs"""
         structure = self.analysis.get_sample_structure() 
         cols = []
@@ -1622,7 +1752,7 @@ class LEECorrectorAnalysis:
         batch_size = 10000
         continue_processing = True
         while continue_processing:
-            EventIDs, events = self.load_events(batch_size,'background','neg2logL is NULL')
+            EventIDs, events = self.load_N_events(batch_size,'background','neg2logL is NULL')
             if EventIDs is None:
                 # No events left to process
                 continue_processing = False
