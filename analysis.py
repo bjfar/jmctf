@@ -1213,29 +1213,13 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
  
     fig4.savefig("local_vs_global_sigma_{0}.png".format(name))
 
-class LEECorrectorMaster:
-    """A class to wrap up analysis and database access routines to manage LEE corrections
-       for large numbers of analyses, with many signal hypotheses to test, and with many
-       random MC draws. Allows more signal hypotheses and random draws to be added to the
-       simulation without recomputing everything"""
+class LEECorrectorBase:
+    """Base class for LEE correector classes, containing common utilities such as SQL
+       database access"""
 
-    def __init__(self,analyses,path,master_name,nullsignals):
-        self.LEEanalyses = {}
-        self.combined_table = 'combined'
-        self.db = '{0}/{1}_{2}.db'.format(path,master_name,'combined') 
-        for name,a in analyses.items():
-            self.LEEanalyses[name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]})
-
-        # Table for recording final best-fit test statistic results
-        comb_cols = [ ("EventID", "integer primary key")
-                     ,("neg2logL", "real")
-                     ,("neg2logL_quad", "real")]
-        colnames = [x[0] for x in comb_cols]
-
-        conn = self.connect_to_db()
-        c = conn.cursor()
-        sql_create_table(c,self.combined_table,comb_cols)
-        self.close_db(conn)
+    def __init__(self,path,dbname):
+        self.db = '{0}/{1}.db'.format(path,dbname) 
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True) # Ensure output path exists
 
     def connect_to_db(self):
         conn = sqlite3.connect(self.db) 
@@ -1245,10 +1229,56 @@ class LEECorrectorMaster:
         conn.commit()
         conn.close()
 
-    def add_events(self,signals,N):
-        """Generate pseudodata for all analyses under the supplied signal hypothesis"""
+    def load_results(self,table,columns):
+        """Load all rows from specified table into panda dataframe"""
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        results = sql_load(c,table,columns)
+        info = sql_table_info(c,table)
+
+        # Figure out types to use for the requested columns
+        #info: [(0, 'EventID', 'integer', 0, None, 1), (1, 'neg2logL_null', 'real', 0, None, 0), (2, 'neg2logL_profiled', 'real', 0, None, 0), (3, 'neg2logL_profiled_quad', 'real', 0, None, 0)]
+        all_dtypedict = {'integer': 'i8', 'real': 'f8'}
+        col_dtypedict = {col: all_dtypedict[dtype] for row, col, dtype, a, b, c in info}        
+        dtypes = [(col, col_dtypedict[col]) for col in columns]
+        arr = np.array(results,dtype=dtypes) 
+        if 'EventID' in columns:
+            index = 'EventID'
+        else:
+            index = None
+        data = pd.DataFrame.from_records(arr,index)
+        return data
+
+class LEECorrectorMaster(LEECorrectorBase):
+    """A class to wrap up analysis and database access routines to manage LEE corrections
+       for large numbers of analyses, with many signal hypotheses to test, and with many
+       random MC draws. Allows more signal hypotheses and random draws to be added to the
+       simulation without recomputing everything"""
+
+    def __init__(self,analyses,path,master_name,nullsignals,nullname):
+        super().__init__(path,"{0}_{1}".format(master_name,nullname))
+
+        self.LEEanalyses = {}
+        self.combined_table = 'combined'
+        for name,a in analyses.items():
+            self.LEEanalyses[name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]},nullname)
+
+        # Table for recording final best-fit test statistic results
+        comb_cols = [ ("EventID", "integer primary key")
+                     ,("neg2logL_null", "real")
+                     ,("neg2logL_profiled", "real")
+                     ,("neg2logL_profiled_quad", "real")]
+        colnames = [x[0] for x in comb_cols]
+
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        sql_create_table(c,self.combined_table,comb_cols)
+        self.close_db(conn)
+ 
+    def add_events(self,N):
+        """Generate pseudodata for all analyses under the null signal hypothesis"""
         for name,a in self.LEEanalyses.items():
-            a.add_events({name: signals[name]},N)
+            a.add_events(N)
         # Record the eventIDs in the combined database as well
         self.add_events_comb(N)
 
@@ -1257,16 +1287,32 @@ class LEECorrectorMaster:
         # Do this by just inserting null data and letting the EventID column auto-increment
         conn = self.connect_to_db()
         c = conn.cursor()
-        command = "INSERT INTO {0} (neg2logL) VALUES (?)".format(self.combined_table)
+        command = "INSERT INTO {0} (neg2logL_null) VALUES (?)".format(self.combined_table)
         nullvals = [(None,)]*N           
         c.executemany(command,  nullvals) 
         self.close_db(conn)
 
-    def process_background(self):
-        """Perform background-only fits for all events where it hasn't already been done"""
+    def process_null(self):
+        """Perform nuisance parameter fits of null hypothesis for all events where it hasn't already been done"""
         for name,a in self.LEEanalyses.items():
-            a.process_background()
-    
+            a.process_null()
+   
+        # Fits completed; extract all results and get combined neg2logL values
+        comb = None
+        for name,a in self.LEEanalyses.items():
+            df = a.load_results(a.null_table,['EventID','neg2logL'])
+            print("df:",df)
+            if comb is None: 
+                comb = df
+            else:
+                comb += df
+        comb.rename(columns={"neg2logL": "neg2logL_null"},inplace=True)
+
+        conn = self.connect_to_db()
+        c = conn.cursor()
+        sql_upsert(c,self.combined_table,comb,'EventID')
+        self.close_db(conn)
+ 
     def process_signals(self,signals,quad_only=True,new_events_only=False):
         """Perform fits for all supplied signal hypotheses, for all events in the database,
            and record the best-fit signal for each event. Compares to any existing best-fits
@@ -1285,7 +1331,7 @@ class LEECorrectorMaster:
         still_processing = True
         while still_processing:
             if new_events_only:
-                EventIDs = self.load_eventIDs(event_batch_size,'combined','neg2logL_quad is NULL')
+                EventIDs = self.load_eventIDs(event_batch_size,'combined','neg2logL_profiled_quad is NULL')
             else:
                 raise RuntimeError("Haven't implemented comparison with existing neg2logLs yet!!!") # TODO: add this 
             if EventIDs is None: still_processing = False
@@ -1302,7 +1348,7 @@ class LEECorrectorMaster:
                 rem = Ns % Nchunk
                 if rem!=0: Nbatches+=1
                 j=0
-                max_neg2logLs = None
+                min_neg2logLs = None
                 for i in range(Nbatches):
                     if rem!=0 and i==Nbatches: size = rem
                     else: size = Nchunk
@@ -1316,16 +1362,16 @@ class LEECorrectorMaster:
                             comb_neg2logLs += neg2logLs
 
                     #print("sig_chunk:", sig_chunk)
-                    # Select the maximum from across all signal hypotheses
-                    if max_neg2logLs is not None:
-                        all_neg2logLs = tf.concat([tf.expand_dims(max_neg2logLs,axis=-1),comb_neg2logLs],axis=-1)
+                    # Select the mininum -2logL from across all signal hypotheses
+                    if min_neg2logLs is not None:
+                        all_neg2logLs = tf.concat([tf.expand_dims(min_neg2logLs,axis=-1),comb_neg2logLs],axis=-1)
                     else:
                         all_neg2logLs = comb_neg2logLs
-                    max_neg2logLs = tf.reduce_max(all_neg2logLs,axis=-1)
+                    min_neg2logLs = tf.reduce_min(all_neg2logLs,axis=-1)
                     j += size 
  
-                # Write the compute max_neg2logLs to disk for this batch of events
-                data = pd.DataFrame(max_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_quad'])
+                # Write the compute min_neg2logLs to disk for this batch of events
+                data = pd.DataFrame(min_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_profiled_quad'])
                 data.index.name = 'EventID' 
  
                 conn = self.connect_to_db()
@@ -1333,7 +1379,6 @@ class LEECorrectorMaster:
                 sql_upsert(c,'combined',data,'EventID')
                 self.close_db(conn)
 
- 
     def load_eventIDs(self,N,reftable,condition,offset=0):
         """Loads eventIDs from database where 'condition' is true in 'reftable'
            To skip rows, set 'offset' to the first row to be considered."""
@@ -1378,7 +1423,7 @@ class LEECorrectorMaster:
         self.close_db(conn) 
         return results[0][0]
 
-    def ensure_equal_events(self,signals):
+    def ensure_equal_events(self):
         """Generate events in all analyses as needed for them to all have the same
            number of events. Should only be needed in case run was aborted mid-way or
            a file has been deleted or some such. Or if say a new analysis has been added."""
@@ -1391,7 +1436,7 @@ class LEECorrectorMaster:
         maxN = max(N+[combN])
 
         for Ni,(name,a) in zip(N,self.LEEanalyses.items()):
-            if Ni<maxN: a.add_events({name: signals[name]},maxN-Ni)   
+            if Ni<maxN: a.add_events(maxN-Ni)   
 
         if combN<maxN: self.add_events_comb(maxN-combN)
 
@@ -1441,16 +1486,17 @@ def sql_upsert(c,table_name,df,primary):
     print("command:", command)
     c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
 
-def sql_load(c,table_name,keys,primary,cols):
+def sql_load(c,table_name,cols,keys=None,primary=None):
     """Load data from an sql table
        with simple selection of items by primary key values.
        Compressed primary key values into a set of ranges to
        construct more efficient queries.
        Assumes the primary key values are supplied 
-       in ascending order."""
+       in ascending order. If keys is None, all rows are loaded."""
 
-    splitdata = np.split(keys, np.where(np.diff(keys) != 1)[0]+1)
-    ranges = [(np.min(x), np.max(x)) for x in splitdata]
+    if keys is not None:
+        splitdata = np.split(keys, np.where(np.diff(keys) != 1)[0]+1)
+        ranges = [(np.min(x), np.max(x)) for x in splitdata]
 
     # Check columns
     #c.execute('PRAGMA table_info({0})'.format(table_name))
@@ -1461,15 +1507,24 @@ def sql_load(c,table_name,keys,primary,cols):
     for col in cols:
         command += col+","
     command = command[:-1]
-    command += " from {0} WHERE ".format(table_name)
-    for i,(start, stop) in enumerate(ranges):
-        command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
-        if i<len(ranges)-1: command += " OR "
+    command += " from {0}".format(table_name)
+
+    if keys is not None:
+        command += " WHERE "
+        for i,(start, stop) in enumerate(ranges):
+            command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
+            if i<len(ranges)-1: command += " OR "
     print("command:", command)
     c.execute(command)
     return c.fetchall() 
+
+def sql_table_info(c,table):
+    """Return table metadata"""
+    command = "PRAGMA table_info({0})".format(table)
+    c.execute(command)
+    return c.fetchall()
  
-class LEECorrectorAnalysis:
+class LEECorrectorAnalysis(LEECorrectorBase):
     """A class to wrap up a SINGLE analysis with connection to output sql database,
        to be used as part of look-elsewhere correction calculations
 
@@ -1489,16 +1544,16 @@ class LEECorrectorAnalysis:
         extrema test statistic values for each event to see if they need to be updated.
     """
 
-    def __init__(self,analysis,path,comb_name,nullsignal):
+    def __init__(self,analysis,path,comb_name,nullsignal,nullname):
+        super().__init__(path,analysis.name)
+
         self.event_table = 'events'
-        self.background_table = 'background'
+        self.null_table = nullname # Name to give null hypothesis used to generate events (e.g. 'background')
         self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
         self.analysis = analysis
         self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
         self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis
         self.nullnuis = {self.analysis.name: {'nuisance': None}} # Use to automatically set nuisance parameters to zero for sample generation
-        pathlib.Path(path).mkdir(parents=True, exist_ok=True) # Ensure output path exists
-        self.db = '{0}/{1}.db'.format(path,self.analysis.name)
         self.joint = JMCJoint(self.analyses)
         conn = self.connect_to_db()
 
@@ -1529,8 +1584,8 @@ class LEECorrectorAnalysis:
 
         bg_cols = test_stat_cols + nuis_cols
         bg_colnames = [x[0] for x in bg_cols]
-        sql_create_table(c,self.background_table,bg_cols) 
-        self.check_table(c,self.background_table,bg_colnames)
+        sql_create_table(c,self.null_table,bg_cols) 
+        self.check_table(c,self.null_table,bg_colnames)
 
         # Table for best-fit (combined) signal model fit data
         comb_cols = test_stat_cols + [("neg2logL_quad", "real")]
@@ -1539,15 +1594,7 @@ class LEECorrectorAnalysis:
         self.check_table(c,self.combined_table,comb_colnames)
 
         self.close_db(conn)
-
-    def connect_to_db(self):
-        conn = sqlite3.connect(self.db) 
-        return conn
-
-    def close_db(self,conn):
-        conn.commit()
-        conn.close()
-
+       
     def check_table(self,c,table,required_cols):
         # Print the columns already existing in our table
         c.execute('PRAGMA table_info({0})'.format(table))
@@ -1559,11 +1606,11 @@ class LEECorrectorAnalysis:
             msg = "Existing table '{0}' for analyis {1} does not contain the expected columns! May have been created with a different version of this code. Please delete it to recreate the table from scratch.\nExpected columns: {2}\nActual columns:{3}".format(table,self.analysis.name,required_cols,existing_cols)
             raise ValueError(msg) 
 
-    def add_events(self,signal,N):
-        """Add N new events generated under 'signal' to the event table"""
+    def add_events(self,N):
+        """Add N new events generated under null hypothesis signal to the event table"""
         print("Recording {0} new events...".format(N))
         start = time.time()
-        joint = JMCJoint(self.analyses,deep_merge(signal,self.nullnuis))
+        joint = JMCJoint(self.analyses,deep_merge(self.nullsignal,self.nullnuis))
 
         # Generate pseudodata
         samples = joint.sample(N)
@@ -1669,7 +1716,7 @@ class LEECorrectorAnalysis:
 
         conn = self.connect_to_db()
         c = conn.cursor()
-        results = sql_load(c,'events',EventIDs,'EventID',cols)
+        results = sql_load(c,'events',cols,EventIDs,'EventID')
         self.close_db(conn) 
 
         if len(results)>0:
@@ -1697,7 +1744,7 @@ class LEECorrectorAnalysis:
 
         conn = self.connect_to_db()
         c = conn.cursor()
-        results = sql_load(c,'background',EventIDs,'EventID',cols)
+        results = sql_load(c,'background',cols,EventIDs,'EventID')
         self.close_db(conn) 
 
         # Convert back to dict of tensors
@@ -1714,7 +1761,7 @@ class LEECorrectorAnalysis:
         else:
             nuis_pars = None
         return nuis_pars
-
+ 
     def fit_signal_batch(self,events,signals):
         """Compute signal fits for selected eventIDs
            Returns test statistic values for combination
@@ -1725,12 +1772,6 @@ class LEECorrectorAnalysis:
         # Run full numerical fits of nuisance parameters for all signal hypotheses
         qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(signals, events, log_tag='qsb')
         return qsb
-
-        # Estimate profile likelihood using quadratic approximation in generalised signal parameter space.
-        f2 = joint_fitted_b.quad_loglike_f(events)
-        #qsb_quad = f2(signals) # calling code can do this themselves, and thus only call this function once per batch of events, however many signals there are to consider. Saves re-doing the matrix calculations associated with computing the quadratic approximation.
-
-        return qsb, f2
 
     def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
@@ -1743,8 +1784,8 @@ class LEECorrectorAnalysis:
     def record_bf_signal_stats(self):
         pass
 
-    def process_background(self):
-        """Compute background-only fits for events currently in our output tables
+    def process_null(self):
+        """Compute null-hypothesis fits for events currently in our output tables
            But only for events where this hasn't already been done."""
 
         joint = JMCJoint(self.analyses)

@@ -54,48 +54,40 @@ def get_grid(analyses,N):
     Ns = len(sgrid)
     return Ns, signal
 
-Ns, signals = get_grid(analyses_read,10) # For testing only! Will die if used for more than e.g. 3 total SRs.
+Ns, signals = get_grid(analyses_read,20) # For testing only! Will die if used for more than e.g. 3 total SRs.
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
+DOF = 2
 
-lee = LEECorrectorMaster(analyses_read,'TEST','all',nosignal)
-lee.ensure_equal_events(nosignal)
-lee.add_events(nosignal,int(1e4))
-lee.process_background()
+path = 'TEST'
+master_name = 'all'
+nullname = 'background'
+lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
+lee.ensure_equal_events()
+lee.add_events(int(1e4))
+lee.process_null()
 lee.process_signals(signals,new_events_only=True)
-     
-quit()
+df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad'])
+print('neg2logL_null:',df['neg2logL_null'])
+print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
+chi2_quad = df['neg2logL_null'] - df['neg2logL_profiled_quad']
+#chi2_quad = df['neg2logL_profiled_quad']
 
-for a in analyses_read.values():
-    this_nosig = {a.name: nosignal[a.name]}
-    lee = LEECorrectorAnalysis(a,'TEST','combined',this_nosig)
-    lee.add_events(this_nosig,int(1e4))
-    lee.process_background()
-    still_processing = True
-    max_neg2logLs = None
-    while still_processing:
-        EventIDs, events = lee.load_events(100,'combined','neg2logL is NULL')
-        if EventIDs is None: still_processing = False
-        if still_processing:
-            pars = lee.load_bg_nuis_pars(EventIDs)
-            quadf = lee.compute_quad(pars,events)
-            Nchunk = 100 # do for 100 signals at a time
-            Nbatches = Ns // Nchunk
-            rem = Ns % Nchunk
-            if rem!=0: Nbatches+=1
-            j=0
-            for i in range(Nbatches):
-                if rem!=0 and i==Nbatches: size = rem
-                else: size = Nchunk
-                sig_chunk = {a.name: {par: dat[j:j+size] for par,dat in signal[a.name].items()}}
-                j += size  
-                neg2logLs = quadf(sig_chunk)
-                #print("sig_chunk:", sig_chunk)
-                # Select the maximum from across all signal hypotheses
-                if max_neg2logLs is not None:
-                    all_neg2logLs = tf.concat([tf.expand_dims(max_neg2logLs,axis=-1),neg2logLs],axis=-1)
-                else:
-                    all_neg2logLs = neg2logLs
-                max_neg2logLs = tf.reduce_max(all_neg2logLs,axis=-1)
-                # TODO: This is only maximising the neg2logL for one analysis. Actually need to combine with all analyses, and THEN take max. But need
-                # to improve structure for this.
+# Plots!
+fig  = plt.figure(figsize=(12,4))
+ax1 = fig.add_subplot(1,2,1)
+ax2 = fig.add_subplot(1,2,2)
+ax2.set(yscale="log")
+sns.distplot(chi2_quad, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad")
+sns.distplot(chi2_quad, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad")
+   
+qx = np.linspace(0, np.max(chi2_quad),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
+qy = tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx))
+sns.lineplot(qx,qy,color='g',ax=ax1, label="asymptotic")
+sns.lineplot(qx,qy,color='g',ax=ax2, label="asymptotic")
+
+ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+   
+fig.tight_layout()
+fig.savefig("{0}/LEEC_quad_{1}_{2}.png".format(path,master_name,nullname))
