@@ -56,21 +56,42 @@ def get_grid(analyses,N):
 
 Ns, signals = get_grid(analyses_read,20) # For testing only! Will die if used for more than e.g. 3 total SRs.
 
+class SigGen:
+    """Object to supply signal hypotheses in chunks
+       Replace with something that e.g. reads from HDF5 file
+       in real cases."""
+    def __init__(self,Ns,signals):
+        self.count = Ns
+        self.chunk_size = 1000
+        self.signals = signals
+        self.j = 0
+
+    def reset(self): 
+        self.j = 0
+
+    def next(self):
+        j = self.j
+        size = self.chunk_size
+        chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.signals.items()}
+        self.j += size
+        return chunk
+
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
-DOF = 2
+DOF = 3
 
 path = 'TEST'
 master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
-lee.ensure_equal_events()
+#lee.ensure_equal_events()
 lee.add_events(int(1e4))
 lee.process_null()
-lee.process_signals(signals,new_events_only=True)
-df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad'])
+lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
+df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad','logw'])
 print('neg2logL_null:',df['neg2logL_null'])
 print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
 chi2_quad = df['neg2logL_null'] - df['neg2logL_profiled_quad']
+w = np.exp(df['logw'])
 #chi2_quad = df['neg2logL_profiled_quad']
 
 # Plots!
@@ -78,8 +99,8 @@ fig  = plt.figure(figsize=(12,4))
 ax1 = fig.add_subplot(1,2,1)
 ax2 = fig.add_subplot(1,2,2)
 ax2.set(yscale="log")
-sns.distplot(chi2_quad, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad")
-sns.distplot(chi2_quad, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad")
+sns.distplot(chi2_quad, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad", hist_kws={'weights': w})
+sns.distplot(chi2_quad, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad", hist_kws={'weights': w})
    
 qx = np.linspace(0, np.max(chi2_quad),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
 qy = tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx))
