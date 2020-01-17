@@ -84,12 +84,21 @@ for name,a in analyses_read.items():
 
 class SigGen:
     """Object to supply signal hypotheses in chunks"""
-    def __init__(self,analyses,h5group,thin=None):
-        self.count = len(h5group['LogLike'][:]) // thin
+    def __init__(self,analyses,h5group,thin=None,batch_size=100):
+        self.count = len(h5group['LogLike'][:])
+        if thin is not None:
+            # Randomly choose size/thin signals from the set. Mostly for speeding up tests.
+            # Needs to be consistent across all events, so need to choose in advance and generate
+            # all required events at once if thinning.
+            self.thin_indices = np.arange(0,self.count)
+            np.random.shuffle(self.thin_indices)
+            self.count = self.count // thin
+
         self.thin = thin
+           
         print("{0} signal hypotheses to consider".format(self.count))
         self.analyses = analyses
-        self.chunk_size = 100
+        self.chunk_size = batch_size
         self.h5group = h5group # location of datasets in hdf5 file
         self.j = 0
 
@@ -104,18 +113,26 @@ class SigGen:
 
     def next(self):
         j = self.j
-        if self.thin is not None:
-            size = self.chunk_size * self.thin
-        else:
-            size = self.chunk_size
- 
+        size = self.chunk_size
+
         # Build validity map in this chunk
         mvalid = None
         for name,a in self.analyses.items():
             for SR,dsetname in zip(a.SR_names,hdf5_names[name]):
-                valid = np.array(self.h5group[dsetname+"_isvalid"][j:j+size],dtype=np.bool)
+                if self.thin is not None:
+                    # I think faster to read all signals and then select the thinned ones in memory
+                    valid = np.array(self.h5group[dsetname+"_isvalid"][:][self.thin_indices[j:j+size]],dtype=np.bool) 
+                else:
+                    valid = np.array(self.h5group[dsetname+"_isvalid"][j:j+size],dtype=np.bool)
                 if mvalid is None: mvalid = valid
                 else: mvalid = mvalid & valid
+        size = len(mvalid) # in case of reaching end of signal datasets
+ 
+        if self.thin is not None:
+            sigIDs = list(self.thin_indices[j:j+size][mvalid])
+        else:
+            sigIDs = list(np.arange(j,j+size)[mvalid])
+
         #print("mvalid:",mvalid)
         # Extract signals
         signal_chunk = {}
@@ -123,19 +140,17 @@ class SigGen:
             signal_chunk[name] = {}
             datalist = []
             for SR,dsetname in zip(a.SR_names,hdf5_names[name]):
-                datalist += [tf.constant(self.h5group[dsetname][j:j+size][mvalid],dtype=float)]
-            # Merge all predictions for this analysis under 's' parameter, and thin if request
+                if self.thin is not None:
+                    # I think faster to read all signals and then select the thinned ones in memory
+                    datalist += [tf.constant(self.h5group[dsetname][:][self.thin_indices[j:j+size]],dtype=float)] 
+                else:
+                    datalist += [tf.constant(self.h5group[dsetname][j:j+size][mvalid],dtype=float)]
+            # Merge all predictions for this analysis under 's' parameter
             stacked = tf.stack(datalist,axis=1)
-            if self.thin is not None:
-                # Randomly choose size/thin signals from the set. Mostly for speeding up tests.
-                indices = list(range(0,np.sum(mvalid)))
-                np.random.shuffle(indices)
-                signal_chunk[name]['s'] = tf.gather(stacked,tf.constant(indices[:self.chunk_size],dtype=tf.int32),axis=0)
-            else:
-                signal_chunk[name]['s'] = stacked
+            signal_chunk[name]['s'] = stacked
 
         self.j += size
-        return signal_chunk
+        return signal_chunk, sigIDs 
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses.values()}
 DOF = 4 # There were 4 parameters in the EWMSSM scan. So if asymptotic theory is in good shape then results should be distributed as chi^2 with DOF=4. But it probably won't be.
@@ -145,17 +160,22 @@ master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
-#lee.add_events(int(1e4))
+lee.add_events(int(1e3))
 lee.process_null()
-lee.process_signals(SigGen(analyses,g,thin=50),event_batch_size=10000)
+lee.process_signals(SigGen(analyses,g,thin=None,batch_size=int(1e7)),new_events_only=True,event_batch_size=2)
 df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad'])
-print('neg2logL_null:',df['neg2logL_null'])
-print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
+
+#print('neg2logL_null:',df['neg2logL_null'])
+#print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
 # Take the minimum over the null and profiled neg2logLs, to ensure that the null is treated
 # as nested within the alternate. Needed when sampling of alternate isn't good enough that
 # null is 'naturally' nested.
 min_neg2logL = df[['neg2logL_null','neg2logL_profiled_quad']].min(axis=1)
 chi2_quad = df['neg2logL_null'] - min_neg2logL
+
+# Get bootstrap resampling to improve statistics
+bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(100000,batch_size=100)
+bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
 
 # Compute observed value of test statistic
 
@@ -166,7 +186,9 @@ ax2 = fig.add_subplot(1,2,2)
 ax2.set(yscale="log")
 sns.distplot(chi2_quad, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad")
 sns.distplot(chi2_quad, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad")
-   
+sns.distplot(bootstrap_chi2, color='b', kde=False, ax=ax1, norm_hist=True, label="LEEC bootstrap")
+sns.distplot(bootstrap_chi2, color='b', kde=False, ax=ax2, norm_hist=True, label="LEEC bootstrap")
+
 qx = np.linspace(0, np.max(chi2_quad),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
 qy = 0.5*tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx)) # Half-chi2 since negative signal contributions not possible?
 sns.lineplot(qx,qy,color='g',ax=ax1, label="asymptotic")

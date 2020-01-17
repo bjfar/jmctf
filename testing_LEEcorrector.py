@@ -74,7 +74,7 @@ class SigGen:
         size = self.chunk_size
         chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.signals.items()}
         self.j += size
-        return chunk
+        return chunk, list(range(j,j+size))
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 DOF = 3
@@ -84,9 +84,13 @@ master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
-lee.add_events(int(1e4))
+#lee.add_events(int(2e3))
 lee.process_null()
 lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
+
+bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(100000,batch_size=100)
+bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
+
 df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad','logw'])
 print('neg2logL_null:',df['neg2logL_null'])
 print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
@@ -101,6 +105,8 @@ ax2 = fig.add_subplot(1,2,2)
 ax2.set(yscale="log")
 sns.distplot(chi2_quad, color='m', kde=False, ax=ax1, norm_hist=True, label="LEEC quad", hist_kws={'weights': w})
 sns.distplot(chi2_quad, color='m', kde=False, ax=ax2, norm_hist=True, label="LEEC quad", hist_kws={'weights': w})
+sns.distplot(bootstrap_chi2, color='b', kde=False, ax=ax1, norm_hist=True, label="LEEC bootstrap")
+sns.distplot(bootstrap_chi2, color='b', kde=False, ax=ax2, norm_hist=True, label="LEEC bootstrap")
    
 qx = np.linspace(0, np.max(chi2_quad),1000) # 6 sigma too far for tf, cdf is 1. single-precision float I guess
 qy = tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx))

@@ -12,6 +12,9 @@ import massminimize as mm
 import copy
 import pathlib
 import time
+import io
+import codecs
+import h5py
 from progress.bar import Bar
 
 # Stuff to help format YAML output
@@ -19,6 +22,37 @@ class blockseqtrue( list ): pass
 def blockseqtrue_rep(dumper, data):
         return dumper.represent_sequence( u'tag:yaml.org,2002:seq', data, flow_style=True )
 yaml.add_representer(blockseqtrue, blockseqtrue_rep)
+
+# Helpers for storing numpy arrays in sqlite tables
+# (see https://stackoverflow.com/a/55799782/1447953)
+compressor = 'zlib'  # zlib, bz2
+
+def adapt_array(arr):
+    """
+    http://stackoverflow.com/a/31312102/190597 (SoulNibbler)
+    """
+    # zlib uses similar disk size that Matlab v5 .mat files
+    # bz2 compress 4 times zlib, but storing process is 20 times slower.
+    out = io.BytesIO()
+    np.save(out, arr)
+    out.seek(0)
+    # Compression didn't seem to make much difference so I turned it off
+    #return sqlite3.Binary(codecs.encode(out.read(),compressor))  # zlib, bz2
+    return sqlite3.Binary(out.read())  # zlib, bz2
+
+def convert_array(text):
+    out = io.BytesIO(text)
+    out.seek(0)
+    #out = io.BytesIO(codecs.decode(out.read(),compressor))
+    return np.load(out)
+
+#def adapt_array(arr):
+#    return arr.tobytes()
+#def convert_array(text):
+#    return np.frombuffer(text)
+
+sqlite3.register_adapter(np.ndarray, adapt_array)    
+sqlite3.register_converter("array", convert_array)
 
 def eCDF(x):
     """Get empirical CDFs of arrays of samples. Assumes first dimension
@@ -1244,7 +1278,7 @@ class LEECorrectorBase:
         pathlib.Path(path).mkdir(parents=True, exist_ok=True) # Ensure output path exists
 
     def connect_to_db(self):
-        conn = sqlite3.connect(self.db) 
+        conn = sqlite3.connect(self.db,detect_types=sqlite3.PARSE_DECLTYPES) # Need the second argument to detect new numpy type 
         return conn
 
     def close_db(self,conn):
@@ -1379,10 +1413,13 @@ class LEECorrectorMaster(LEECorrectorBase):
                     if rem!=0 and i==Nbatches: size = rem
                     else: size = Nchunk
                     comb_neg2logLs = None
-                    sig_chunk = signal_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+                    sig_chunk, signalIDs = signal_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
                     for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
                         #print("running quad:",name)
                         neg2logLs = quad({name: sig_chunk[name]})
+                        # Record all signal likelihoods to disk, so that we can use them for bootstrap resampling later on.
+                        # Warning: may take a lot of disk space if there are a lot of signals.
+                        a.record_signal_logLs(neg2logLs,signalIDs,EventIDs.numpy(),Ltype='quad')
                         #print("...done")
                         #print("signal neg2logLs:", neg2logLs)
                         if comb_neg2logLs is None:
@@ -1408,6 +1445,43 @@ class LEECorrectorMaster(LEECorrectorBase):
                 c = conn.cursor()
                 sql_upsert_if_smaller(c,'combined',data,'EventID') # Only replace existing values if new ones are smaller
                 self.close_db(conn)
+
+    def get_bootstrap_sample(self,N,batch_size=2000):
+        """Obtain a bootstrap resampling of all 'full' tables in all analyses, 
+           combine/profile the likelihoods, and add results to bootstrap table.
+
+           Keep batch size small when number of signals is large, to avoid
+           running out of RAM. Will have likelihoods for all bootstrap events
+           for all signals."""
+  
+        Nbatches = int(np.ceil(N/batch_size))
+        all_min_neg2logL = None
+        all_b_neg2logL = None
+        bar = Bar('Generating {0} bootstrap samples in batches of {1}'.format(N,batch_size), max=Nbatches*len(self.LEEanalyses))
+        for i in range(Nbatches):
+            if i==Nbatches-1 and N % batch_size > 0: size = N % batch_size
+            else: size = batch_size 
+            all_neg2logLs = None
+            these_b_neg2logLs = None
+            for name,a in self.LEEanalyses.items():
+                s_neg2logLs, b_neg2logLs = a.get_bootstrap_sample(size)
+                if all_neg2logLs is None: all_neg2logLs = s_neg2logLs
+                else: all_neg2logLs += s_neg2logLs
+                if these_b_neg2logLs is None: these_b_neg2logLs = b_neg2logLs
+                else: these_b_neg2logLs += b_neg2logLs
+                bar.next()
+
+            # Profile
+            min_neg2logL = tf.reduce_min(all_neg2logLs,axis=0) # Signal dimension is first here, different to elsewhere
+       
+            # Write to disk? Could just return if this is fast. Test to find out.
+            if all_min_neg2logL is None: all_min_neg2logL = min_neg2logL
+            else: all_min_neg2logL = tf.concat([all_min_neg2logL,min_neg2logL],axis=0) # Only one dimension left
+ 
+            if all_b_neg2logL is None: all_b_neg2logL = these_b_neg2logLs
+            else: all_b_neg2logL = tf.concat([all_b_neg2logL,these_b_neg2logLs],axis=0) 
+        bar.finish()
+        return all_min_neg2logL, all_b_neg2logL
 
     def load_eventIDs(self,N,reftable=None,condition=None,offset=0):
         """Loads eventIDs from database where 'condition' is true in 'reftable'
@@ -1492,6 +1566,17 @@ def sql_create_table(c,table_name,columns):
     #print("command:",command)
     c.execute(command)
 
+def sql_add_columns(c,table_name,columns):
+    """Add columns to an SQLite table if they don't already exist"""
+    # Check what columns currently exist
+    c.execute('PRAGMA table_info({0})'.format(table_name))
+    results = c.fetchall()
+    existing_cols = [row[1] for row in results]
+    # Have to add columns one at a time. Oh well, apparently should be fast anyway.
+    commands = ["ALTER TABLE {0} ADD COLUMN {1} {2}".format(table_name,col,t) for col,t in columns if col not in existing_cols]
+    for command in commands:
+       c.execute(command)
+
 def sql_upsert(c,table_name,df,primary):
     """Insert or overwrite data into a set of SQL columns.
        Data assumed to be a pandas dataframe. Must specify
@@ -1544,6 +1629,24 @@ def sql_upsert_if_smaller(c,table_name,df,primary):
                 if j<len(columns)-1: command += ","
     #print("command:", command)
     c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+
+def sql_insert_as_arrays(c,table_name,df):
+    """Do not treat Pandas rows as SQL rows; just dump each 
+       column into one SQL entry as BLOB data"""
+
+    columns = df.to_records().dtype.names[1:] # remove index column, don't care about it for this  
+    command = "INSERT INTO {0} ({1}".format(table_name,columns[0])
+    if len(columns)>1:
+        for col in columns[1:]:
+            command += ",{0}".format(col)
+    command += ") VALUES (?"
+    if len(columns)>1:
+        for col in columns[1:]:
+            command += ",?"
+    command += ")"
+
+    c.execute(command, df.to_numpy().T) # Storing entire dataframe column as one entry in an SQL row
+
 
 def sql_load(c,table_name,cols,keys=None,primary=None):
     """Load data from an sql table
@@ -1609,6 +1712,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         self.event_table = 'events'
         self.null_table = nullname # Name to give null hypothesis used to generate events (e.g. 'background')
         self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
+        self.full_table_quad = 'all_signals_quad' # Table of profile likelihood (quadratic approximation) values for all events *and* all signals. Only generated on request due to possibly huge size.
         self.analysis = analysis
         self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
         self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis
@@ -1827,15 +1931,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             nuis_pars = None
         return nuis_pars
  
-    def fit_signal_batch(self,events,signals):
+    def fit_signal_batch(self,events,signals,signalIDs=None,record_all=True):
         """Compute signal fits for selected eventIDs
            Returns test statistic values for combination
-           with other analyses. No results recorded; this
-           needs to be request in a separate step by the calling
-           code, by running 'record_bf_signal_stats'
+           with other analyses. 
         """
         # Run full numerical fits of nuisance parameters for all signal hypotheses
         qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(signals, events, log_tag='qsb')
+
         return qsb
 
     def compute_quad(self,pars,events):
@@ -1844,7 +1947,182 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            the null signal"""
         joint_fitted_b = JMCJoint(self.analyses,deep_merge(self.nullsignal,pars))
         quadf = joint_fitted_b.quad_loglike_f(events)
+
         return quadf 
+
+    def record_signal_logLs(self,neg2logLs,signalIDs,EventIDs,Ltype,dbtype='hdf5'):
+        """Record likelihoods from a batch of signal fits to 'full' tables.
+           In this case ID numbers also need to be assigned to signals,
+           so that we can uniquely assign each of them to a row in the
+           output table.
+
+           Note: Tables are oriented such that events are columns and signals
+           are rows. 1000 events per table, since SQLite likes small numbers 
+           of columns (but can hand zillions of rows)
+           """
+        if Ltype != 'quad':
+            raise ValueError("Sorry, signal fit result recording has so far only been implemented for the 'quadratic approximation' results.")
+
+        if neg2logLs.shape[1]>0:
+            if dbtype is 'hdf5':
+                f = h5py.File('{0}.hdf5'.format(self.db),'a') # Create if doesn't exist, otherwise read/write
+            elif dbtype is 'sqlite':
+                conn = self.connect_to_db()
+                c = conn.cursor()
+            else:
+                raise ValueError("Unrecognised database type selected!")
+
+            # # First split up neg2logLs into batches to be saved in various of the 'full' tables.
+            # # E.g. events in the range 0-999 need to go in table 0, 1000-1999 in table 1, etc.
+            # # We will assume that EventIDs already come in ascending order. TODO: Add check for this.
+            events_per_table = 1000.
+            minEventID = np.min(EventIDs)
+            maxEventID = np.max(EventIDs)
+            minTable = int(minEventID // events_per_table)
+            maxTable = int(maxEventID // events_per_table)
+
+            for i in range(minTable,maxTable+1):
+                 this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
+                 mask = (this_range[0] <= EventIDs) & (EventIDs < this_range[1])
+                 if np.sum(mask)>0:
+                     neg2logL_batch = neg2logLs[mask]
+                     eventID_batch = EventIDs[mask]
+  
+                     # # likelihoods to be stored with one event per column (and zillions of rows corresponding to the signals)
+                     # columns = [("E_{0}".format(E_id),"real") for E_id in eventID_batch]
+                     # col_names = [x[0] for x in columns]
+  
+                     # this_table = self.full_table_quad+"_batch_{0}".format(i)
+                     # sql_create_table(c,this_table,[('SignalID',"integer primary key")]+columns)
+                     # # If table already existed then we may have to add new event columns
+                     # sql_add_columns(c,this_table,columns)
+
+                     # # Add likelihoods to output record.
+                     # data = pd.DataFrame(neg2logL_batch.numpy().T,index=signalIDs,columns=col_names)
+                     # data.index.name = 'SignalID' 
+                     # sql_upsert(c,this_table,data,primary='SignalID')
+
+                     #====== Version 2 ======
+                     # Ok it is very slow to retrieve these giant tables with separately stored entries.
+                     # However, we *can* just stream raw bits straight into SQL entries. So perhaps just store
+                     # entire signal table for each event as one entry. I.e. just one row to retrieve!
+                     # Downside is that all signals have to be computed at once, cannot add more.
+                     # Or rather more can be added more rows I guess, but won't know if there is overlap.
+
+                     columns = [("E_{0}".format(E_id),"array") for E_id in eventID_batch] # We defined a new datatype, 'array', for sqlite to use to store numpy arrays
+                     col_names = [x[0] for x in columns]
+                     data = pd.DataFrame(neg2logL_batch.numpy().T,columns=col_names)
+                     this_table = self.full_table_quad+"_batch_{0}".format(i)
+
+                     if dbtype is 'hdf5':
+                         # For hdf5 we don't need to use separate tables, we'll just make one dataset for every event, and extend them as needed.
+                         for col in col_names:
+                             if col in f.keys():
+                                 f[col].resize((len(f[col]) + len(data.index)), axis = 0)
+                                 try:
+                                     f[col][-len(data.index):] = np.array(data[col])
+                                 except TypeError:
+                                     print("len(data.index):", len(data.index))
+                                     print("np.array(data[col]):", np.array(data[col]))
+                                     raise  
+                             else:
+                                 f.create_dataset(col, data=np.array(data[col]), chunks=(1000,), maxshape=(None,))      
+
+                     elif dbtype is 'sqlite':
+                         sql_create_table(c,this_table,columns)
+
+                         # If table already existed then we may have to add new event columns
+                         sql_add_columns(c,this_table,columns)
+                         sql_insert_as_arrays(c,this_table,data)
+
+            if dbtype is 'hdf5':
+                 f.close()
+            elif dtype is 'sqlite':   
+                 self.close_db(conn)
+        else:
+            # Signal dimension is empty! Nothing to record.
+            pass
+ 
+    def get_bootstrap_sample(self,N,dbtype='hdf5'):
+        """Obtain a bootstrap resampling of size N of the 'full' output tables for all recorded signals"""
+        if N==0: raise ValueError("Asked for zero samples!")
+        if N<0: raise ValueError("Asked for negative number of samples!")
+
+        if dbtype is 'hdf5':
+            f = h5py.File('{0}.hdf5'.format(self.db),'a') # Create if doesn't exist, otherwise read/write
+        elif dbtype is 'sqlite':
+            conn = self.connect_to_db()
+            c = conn.cursor()
+        else:
+            raise ValueError("Unrecognised database type selected!")
+
+        if dbtype is 'sqlite':
+            #select * from users
+            #where id in (
+            #  select round(random() * 21e6)::integer as id
+            #  from generate_series(1, 110) -- Preserve duplicates
+            #)
+            #limit 100
+            events_per_table = 1000
+
+            # First inspect full tables to see what the maximum EventID is, so we know what indices to
+            # sample from. Assume the set of events is complete up to that maximum number.
+            conn = self.connect_to_db()
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            results = c.fetchall() 
+            full_table_batches = [int(row[0].split("_batch_")[1]) for row in results if row[0].startswith(self.full_table_quad)] 
+            max_batch = max(full_table_batches)
+            max_batch_table = self.full_table_quad+"_batch_{0}".format(max_batch)
+
+            # Inspect the highest batch and find the maximum EventID (column) in it
+            c.execute('PRAGMA table_info({0})'.format(max_batch_table))
+            results = c.fetchall()
+            EventIDs = [int(row[1].split("E_")[1]) for row in results if row[1].startswith("E_")]
+            maxEventID = max(EventIDs)
+
+        elif dbtype is 'hdf5':
+            maxEventID = len(f.keys()) # Assume EventID list is complete           
+ 
+        # Select N integers between 1 and maxEventID with replacement (the bootstrap sample)
+        bootstrap_EventIDs = np.random.randint(1,maxEventID,N)
+        
+        # Sort into ascending order and group according to the batches in which they can be found
+        #bootstrap_EventIDs.sort();
+        
+        # Extract selected bootstrap events table by table. Duplicate column selections should work fine if/when they occur.
+        all_events = []
+        if dbtype is 'sqlite':
+            for i in range(0,max_batch+1):
+                this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
+                mask = (this_range[0] <= bootstrap_EventIDs) & (bootstrap_EventIDs < this_range[1])
+                if np.sum(mask)>0:
+                    these_eventIDs = bootstrap_EventIDs[mask]
+
+                    # Get all logL values for all signal rows for these events
+                    command = "SELECT "+", ".join(["E_{0}".format(ID) for ID in these_eventIDs])
+                    command += " FROM {0}".format(self.full_table_quad+"_batch_{0}".format(i))
+                    #print("command:", command)
+                    c.execute(command)
+                    results = c.fetchall()
+                    these_events = []
+                    for row in results:
+                        these_events += [tf.stack(row,axis=1)] # Join each row of results along events direction 
+                    all_events += [tf.concat(these_events,axis=0)] # Join all these events along signal direction
+            signal_neg2logL = tf.concat(all_events,axis=1) # Join all event columns together
+            self.close_db(conn)
+        elif dbtype is 'hdf5':
+            for ID in bootstrap_EventIDs:
+                all_events += [f["E_{0}".format(ID)][:]]  
+            f.close()
+            signal_neg2logL = tf.stack(all_events,axis=1) # Join all event columns together
+
+        # Actually we also need the background-only neg2logL values, so grab those too
+        # I think here it is fine, and easier, to load them all and do the selection in RAM.
+        df = self.load_results(self.null_table,['EventID','neg2logL'])
+        background_neg2logL = tf.constant(df.iloc[bootstrap_EventIDs]['neg2logL'].to_numpy(),dtype=float) 
+
+        return signal_neg2logL, background_neg2logL
 
     def record_bf_signal_stats(self):
         pass
