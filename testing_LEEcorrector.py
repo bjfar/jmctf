@@ -1,6 +1,7 @@
 """Testing LEEcorrector objects"""
 
-from analysis import collider_analyses_from_long_YAML, JMCJoint, deep_merge, LEEcorrection, LEECorrectorAnalysis, LEECorrectorMaster
+from analysis import collider_analyses_from_long_YAML, LEECorrectorMaster
+from common import deep_merge
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -79,26 +80,110 @@ class SigGen:
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
 DOF = 3
 
+# Specific signal whose local distributions and p-values we would like to know
+# This case is 'cherry-picked' to match the "observed" counts in every signal region of every analysis
+signal_test = {a.name: {'s': tf.constant([[n for n in a.SR_n]], dtype=float)} for a in analyses_read.values()}
+
 path = 'TEST'
 master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
-#lee.add_events(int(2e3))
+lee.add_events(int(1e3))
 lee.process_null()
-lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
+sig_name = "cherry_picked"
+lee.process_signal_local(signal_test,name=sig_name)
+lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
+#lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 
-bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(100000,batch_size=100)
+bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100)
+#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='hdf5')
+#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='sqlite')
 bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
 
-df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad','logw'])
-print('neg2logL_null:',df['neg2logL_null'])
-print('neg2logL_profiled_quad:',df['neg2logL_profiled_quad'])
-chi2_quad = df['neg2logL_null'] - df['neg2logL_profiled_quad']
-w = np.exp(df['logw'])
+df_null = lee.load_results(lee.local_table+lee.nullname,['neg2logL'])
+df_prof = lee.load_results(lee.profiled_table,['neg2logL_quad','logw'])
+print('neg2logL_null:',df_null['neg2logL'])
+print('neg2logL_profiled_quad:',df_prof['neg2logL_quad'])
+chi2_quad = df_null['neg2logL'] - df_prof['neg2logL_quad']
+w = np.exp(df_prof['logw'])
 #chi2_quad = df['neg2logL_profiled_quad']
 
 # Plots!
+
+# Local histograms, combined and for each analysis
+for aname,a in list(lee.LEEanalyses.items()) + [('combined',lee)]:
+    print("aname, a:", aname, a)
+    fig = plt.figure(figsize=(10,4))
+    ax1 = fig.add_subplot(121)
+    ax2 = fig.add_subplot(122)
+    ax2.set(yscale='log')
+
+    df_null = a.load_results(a.local_table+a.nullname,['neg2logL'])
+    df_sig = a.load_results(a.local_table+sig_name,['neg2logL'])
+  
+    qb  = df_null['neg2logL']
+    #qb_quad = q_quad[:,i].numpy()
+    qsb = df_sig['neg2logL']
+    if np.sum(np.isfinite(qb)) < 2:
+        print("qb mostly nan!")
+    if np.sum(np.isfinite(qsb)) < 2:
+        print("qsb mostly nan!")
+    qb = qb[np.isfinite(qb)]
+    qsb = qsb[np.isfinite(qsb)]
+    
+    sns.distplot(qsb-qb, bins=50, color='b',kde=False, ax=ax1, norm_hist=True)
+    sns.distplot(qsb-qb, bins=50, color='b',kde=False, ax=ax2, norm_hist=True)
+   
+    # Compute and plot asymptotic distributions!
+    df_A = a.load_results(a.local_table+sig_name+"_asymptotic",['qAsb','qAb','qO'])
+    qAsb = df_A['qAsb'][0]
+    qAb  = df_A['qAb'][0]
+    qO   = df_A['qO'][0]
+    
+    var_mu_sb = 1./tf.abs(qAsb) 
+    var_mu_b  = 1./tf.abs(qAb) 
+    
+    #    #var_mu = sign * 1. / LLRA
+    #    Eq = LLRA
+    #    Varq = sign * 4 * LLRA
+    
+    Eq_sb = -1. / var_mu_sb
+    Eq_b  = 1. / var_mu_b
+    
+    Vq_sb = 4. / var_mu_sb
+    Vq_b  = 4. / var_mu_b
+    
+    qsbx = Eq_sb + np.linspace(-5*np.sqrt(Vq_sb),5*np.sqrt(Vq_sb),1000)
+    qbx  = Eq_b  + np.linspace(-5*np.sqrt(Vq_b), 5*np.sqrt(Vq_b), 1000)
+    
+    #qsbx = np.linspace(np.min(qsb),np.max(qsb),1000)
+    #qbx  = np.linspace(np.min(qb),np.max(qb),1000)
+    qsby = tf.math.exp(tfd.Normal(loc=Eq_sb, scale=tf.sqrt(Vq_sb)).log_prob(qsbx)) 
+    qby  = tf.math.exp(tfd.Normal(loc=Eq_b, scale=tf.sqrt(Vq_b)).log_prob(qbx)) 
+    
+    # Asymptotic p-value and significance for background-only hypothesis test
+    apval = tfd.Normal(0,1).cdf(np.abs(qO - Eq_b) / np.sqrt(Vq_b))
+    asig = -tfd.Normal(0,1).quantile(apval)
+    
+    sns.lineplot(qbx,qby,color='b',ax=ax1)
+    sns.lineplot(qsbx,qsby,color='r',ax=ax1)
+    
+    sns.lineplot(qbx, qby,color='b',ax=ax2)
+    sns.lineplot(qsbx,qsby,color='r',ax=ax2)
+    
+    #print("qO[{0}]: {1}".format(i,qO[i]))
+    
+    ax1.axvline(x=qO,lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
+    ax2.axvline(x=qO,lw=2,c='k',label="apval={0}, z={1:.1f}".format(apval,asig))
+    
+    ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+
+    fig.tight_layout()
+    fig.savefig("{0}/local_hist_{1}_{2}.png".format(path,sig_name,aname))
+
+# Global/profiled histograms
 fig  = plt.figure(figsize=(12,4))
 ax1 = fig.add_subplot(1,2,1)
 ax2 = fig.add_subplot(1,2,2)

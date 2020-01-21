@@ -142,7 +142,7 @@ class SigGen:
             for SR,dsetname in zip(a.SR_names,hdf5_names[name]):
                 if self.thin is not None:
                     # I think faster to read all signals and then select the thinned ones in memory
-                    datalist += [tf.constant(self.h5group[dsetname][:][self.thin_indices[j:j+size]],dtype=float)] 
+                    datalist += [tf.constant(self.h5group[dsetname][:][self.thin_indices[j:j+size]][mvalid],dtype=float)] 
                 else:
                     datalist += [tf.constant(self.h5group[dsetname][j:j+size][mvalid],dtype=float)]
             # Merge all predictions for this analysis under 's' parameter
@@ -150,10 +150,14 @@ class SigGen:
             signal_chunk[name]['s'] = stacked
 
         self.j += size
+        #print("signal_chunk:", signal_chunk)
+        #print("sigIDs:", len(sigIDs))
         return signal_chunk, sigIDs 
 
 nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses.values()}
 DOF = 4 # There were 4 parameters in the EWMSSM scan. So if asymptotic theory is in good shape then results should be distributed as chi^2 with DOF=4. But it probably won't be.
+
+# Specific signal whose local distributions and p-values we would like to know
 
 path = 'TEST_EWMSSM'
 master_name = 'all'
@@ -162,7 +166,8 @@ lee = LEECorrectorMaster(analyses,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
 lee.add_events(int(1e3))
 lee.process_null()
-lee.process_signals(SigGen(analyses,g,thin=None,batch_size=int(1e7)),new_events_only=True,event_batch_size=2)
+lee.process_local_signal()
+lee.process_signals(SigGen(analyses,g,thin=None,batch_size=int(5e5)),new_events_only=True,event_batch_size=10,dbtype='hdf5')
 df = lee.load_results(lee.combined_table,['neg2logL_null','neg2logL_profiled_quad'])
 
 #print('neg2logL_null:',df['neg2logL_null'])
@@ -174,8 +179,11 @@ min_neg2logL = df[['neg2logL_null','neg2logL_profiled_quad']].min(axis=1)
 chi2_quad = df['neg2logL_null'] - min_neg2logL
 
 # Get bootstrap resampling to improve statistics
-bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(100000,batch_size=100)
-bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
+bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100,dbtype='hdf5')
+#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100,dbtype='sqlite')
+#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100)
+bootstrap_chi2 = bootstrap_b_neg2logL - np.min(np.stack([bootstrap_b_neg2logL,bootstrap_neg2logL],axis=1),axis=1) # Again make sure null is nested
+print("bootstrap_chi2:", bootstrap_chi2.shape)
 
 # Compute observed value of test statistic
 
