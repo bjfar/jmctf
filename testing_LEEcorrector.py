@@ -1,7 +1,7 @@
 """Testing LEEcorrector objects"""
 
 from analysis import collider_analyses_from_long_YAML, LEECorrectorMaster
-from common import deep_merge
+from common import deep_merge, CDFf
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -89,11 +89,11 @@ master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
-lee.add_events(int(1e3))
-lee.process_null()
+#lee.add_events(int(1e3))
+#lee.process_null()
 sig_name = "cherry_picked"
-lee.process_signal_local(signal_test,name=sig_name)
-lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
+#lee.process_signal_local(signal_test,name=sig_name)
+#lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
 #lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 
 bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100)
@@ -101,11 +101,10 @@ bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_s
 #bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='sqlite')
 bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
 
-df_null = lee.load_results(lee.local_table+lee.nullname,['neg2logL'])
-df_prof = lee.load_results(lee.profiled_table,['neg2logL_quad','logw'])
-print('neg2logL_null:',df_null['neg2logL'])
-print('neg2logL_profiled_quad:',df_prof['neg2logL_quad'])
-chi2_quad = df_null['neg2logL'] - df_prof['neg2logL_quad']
+df_null, df_null_obs = lee.load_results(lee.local_table+lee.nullname,['neg2logL'],get_observed=True)
+df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['neg2logL_quad','logw'],get_observed=True)
+chi2_quad     = df_null['neg2logL'] - df_prof['neg2logL_quad']
+chi2_quad_obs = df_null_obs['neg2logL'][0] - df_prof_obs['neg2logL_quad'][0]
 w = np.exp(df_prof['logw'])
 #chi2_quad = df['neg2logL_profiled_quad']
 
@@ -136,7 +135,7 @@ for aname,a in list(lee.LEEanalyses.items()) + [('combined',lee)]:
     sns.distplot(qsb-qb, bins=50, color='b',kde=False, ax=ax2, norm_hist=True)
    
     # Compute and plot asymptotic distributions!
-    df_A = a.load_results(a.local_table+sig_name+"_asymptotic",['qAsb','qAb','qO'])
+    df_A = a.load_results(a.local_table+sig_name,['qAsb','qAb','qO'],from_observed=True)
     qAsb = df_A['qAsb'][0]
     qAb  = df_A['qAb'][0]
     qO   = df_A['qO'][0]
@@ -197,6 +196,15 @@ qx = np.linspace(0, np.max(chi2_quad),1000) # 6 sigma too far for tf, cdf is 1. 
 qy = tf.math.exp(tfd.Chi2(df=DOF).log_prob(qx))
 sns.lineplot(qx,qy,color='g',ax=ax1, label="asymptotic")
 sns.lineplot(qx,qy,color='g',ax=ax2, label="asymptotic")
+
+# Observed empirical and asymptotic p-values
+epval = 1 - CDFf(chi2_quad)(chi2_quad_obs)
+apval = tfd.Chi2(df=DOF).log_prob(chi2_quad_obs)
+esig = -tfd.Normal(0,1).quantile(epval)
+asig = -tfd.Normal(0,1).quantile(apval)
+
+ax1.axvline(x=chi2_quad_obs,lw=2,c='k',label="e_z={0}, a_z={1}".format(asig,esig))
+ax2.axvline(x=chi2_quad_obs,lw=2,c='k',label="e_z={0}, a_z={1}".format(asig,esig))
 
 ax1.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
 ax2.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)

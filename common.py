@@ -53,7 +53,7 @@ def eCDF(x):
     return cdf
     #return tf.broadcast_to(cdf,x.shape)
 
-def CDFf(samples,reverse=False):
+def CDFf(samples,reverse=False,return_argsort=False):
     """Return interpolating function for CDF of some simulated samples"""
     if reverse:
         s = np.argsort(samples[np.isfinite(samples)],axis=0)[::-1] 
@@ -61,7 +61,10 @@ def CDFf(samples,reverse=False):
         s = np.argsort(samples[np.isfinite(samples)],axis=0)
     ecdf = eCDF(samples[s])
     CDF = spi.interp1d([-1e99]+list(samples[s])+[1e99],[ecdf[0]]+list(ecdf)+[ecdf[1]])
-    return CDF, s #pvalue may be 1 - CDF(obs), depending on definition/ordering
+    if return_argsort:
+        return CDF, s #pvalue may be 1 - CDF(obs), depending on definition/ordering
+    else:
+        return CDF
 
 def gather_by_idx(x,indices):
     idx = tf.cast(indices,dtype=tf.int32)
