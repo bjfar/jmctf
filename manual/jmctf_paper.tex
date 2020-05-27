@@ -1,0 +1,33 @@
+\documentclass[a4paper]{article}	% additional options that can be set in the square brackets, such as font size (the default is 12pt).
+
+\usepackage{amsmath,amssymb,url,hyperref}
+\usepackage{mathrsfs}
+\usepackage{graphicx,subfig}
+
+\begin{document}
+
+\title{JMC-TF: a tool for performing Monte-Carlo simulations of test statistics for BSM global fits}
+
+\author{Ben Farmer} 
+
+\date{}
+
+\maketitle
+
+\abstract{Global fits of ``Beyond-the-Standard-Model'' physics typically rely heavily on the validity of asymptotic theory when constructing confidence intervals and performing tests for the existence of new physics. However, in many scenarios there are strong reasons to believe that standard asymptotic theory may perform badly, such as when small counts exist in important components of the joint likelihood, when strongly non-linear relationships exist between theory parameters and experimental predictions, or when theoretical constraints create boundaries in the parameter space. For these reasons, among others, it is very useful to be able to check the distributions of test statistics by Monte Carlo simulation. In this paper I present a Python-based tool, JMC-TF (Joint Monte-Carlo simulations with TensorFlow), for efficiently performing these simulations, and use it to re-analyse the statistical significance of an excess reported in a recent GAMBIT combination of LHC searches for electroweakinos.}
+
+
+\tableofcontents
+
+\section{Introduction}
+
+Global fits of ``Beyond-the-Standard-Model'' physics typically rely heavily on the validity of asymptotic theory when constructing confidence intervals and performing tests for the existence of new physics. However, in many scenarios there are strong reasons to believe that standard asymptotic theory may perform badly, such as small counts in components of the joint likelihood, strong non-linear relationships between theory parameters and experimental predictions, or theoretical constraints that create boundaries in the parameter space. For these reasons, among others, it is very useful to be able to check the distributions of test statistics by Monte Carlo simulation. It is often numerically infeasible to do this directly, i.e. by repeating global fits many times with pseudodata, because obtaining the BSM predictions for components of the joint likelihood is typically cpu-intensive. However, reasonable approximations can be obtained by re-using predictions
+
+% Dump figures before producing bibliography
+\clearpage
+
+% References are handled by BibTeX
+\bibliographystyle{utphys} % Referencing style
+\bibliography{jmctf} % The name of the .bib file
+
+\end{document}

@@ -1,0 +1,6 @@
+.. _adding_new_analysis_classes:
+
+Extending JMCTF with new analysis objects
+=========================================
+
+

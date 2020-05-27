@@ -1,7 +1,7 @@
 """Testing LEEcorrector objects"""
 
-from analysis import collider_analyses_from_long_YAML, LEECorrectorMaster
-from common import deep_merge, CDFf
+from JMCTF.LEE import collider_analyses_from_long_YAML, LEECorrectorMaster
+from JMCTF.common import deep_merge, CDFf
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -90,7 +90,7 @@ nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
 #lee.ensure_equal_events()
 #lee.add_events(int(1e3))
-#lee.process_null()
+lee.process_null()
 sig_name = "cherry_picked"
 #lee.process_signal_local(signal_test,name=sig_name)
 #lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')

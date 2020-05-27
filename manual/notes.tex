@@ -1,0 +1,128 @@
+\documentclass[a4paper]{article}	% additional options that can be set in the square brackets, such as font size (the default is 12pt).
+
+\usepackage{amsmath,amssymb,url,hyperref}
+\usepackage{mathrsfs}
+\usepackage{graphicx,subfig}
+
+\begin{document}
+
+\title{Notes on DD DFT}
+
+\author{Benjamin Farmer} 
+
+\date{}
+
+\maketitle
+
+\abstract{}
+
+\tableofcontents
+
+\section{Introduction}
+
+...
+
+\section{Handy references}
+
+Keep this list updated...
+
+\subsubsection*{Fitzpatrick / Huxton group papers:}
+\begin{description}
+    \item[1203.3542\cite{Fitzpatrick2012a}] Orig. NR EFT of DD paper
+    \item[1211.2818\cite{Fitzpatrick2012}] Analysis using their EFT method
+    \item[1308.6288\cite{Anand2014b}] Mathematica tools (\texttt{DMFormFactor}) 
+    \item[1405.6690\cite{Anand2014a}] Focus on velocity dependent and derivative couplings
+\end{description}
+
+\subsubsection*{Others:}
+\begin{description}
+    \item[1307.5955\cite{Cirelli2013}] Rescaling DD results with EFT techniques (+ mathematica tools)
+    \item[1406.0524\cite{Catena2014}] EFT prospects for tonne-scale detectors + simulated parameter extraction
+    \item[1503.03379\cite{Schneck2015}] SuperCDMS EFT analysis
+    \item[1504.06554\cite{Catena2015}] EFT coupling 28 parameter global fit
+    \item[1505.03117\cite{Dent2015}] Mapping simplified DM models to EFT parameters
+\end{description}
+
+\section{``Raw'' event rate from EFT input}
+
+Just a rough sketch...
+
+1203.3542\cite{Fitzpatrick2012a} gives the details of the theoretical calculation of the event rate. Their ``master formula'' for the recoil spectrum in the full effective theory is eq.(56):
+
+\begin{equation}
+ \frac{\mathrm{d}R_D}{\mathrm{d}E_R} = N_T\frac{\rho_\chi m_T}{32\pi m_\chi^3 m_N^2} \left\langle \frac{1}{v}\sum_{ij}\sum_{N,N'=p,n} c_i^N c_j^{N'} F_{ij}^{N,N'}\left(v^2,q^2\right) \right\rangle 
+ \label{eq:master}
+\end{equation}
+
+where the angle brackets indicate integration over the halo velocity distribution, i.e. 
+
+\begin{equation}
+ \langle X\rangle=\int_{v>v_\text{min}(E_R)} \! X f_\mathrm{E}(\vec{v})\mathrm{d}^3 v
+\end{equation}
+
+The form factors in eq. \ref{eq:master} are indexed over pairs of NR effective operators (see eq.18-25, and app. C for mapping of relativistic to NR operators), which couple separately to neutrons and protons in proportion to the coefficients $c_i^{N}$. These form factors also vary with the target nuclei. They can be expressed in terms of the nuclear form factors 
+%
+\begin{align}
+   &F_X^{N,N'}\text{ ,   with  } X = M,\Sigma',\Sigma'',\Delta,\Phi'' \text{    and} \\
+   &F_{X,Y}^{N,N'}\text{ ,   with  } (X,Y) = (M,\Phi'')\text{ and }(\Sigma',\Delta)
+\end{align}
+%
+where $\{M,\Sigma',\Sigma'',\Delta,\Phi',\Phi''\}$ label a set of nuclear response functions (see table 1 of 1203.3542\cite{Fitzpatrick2012a}), according to the expressions in A.2 of 1203.3542\cite{Fitzpatrick2012a}.
+
+These nuclear form factors then encode all the nucleus-dependent information. Approximate analytical expressions for them for a variety of nuclei appear in A.3, which should make them easy to use. All the hard work is done. Rather than copy out those long polynomials, though, one can use their \textit{Mathematica} package \texttt{DDFormFactor}, described in 1308.6288\cite{Anand2014b}. However the physics is decomposed in a different way in this package/paper and I haven't yet figured out how it maps back to the form factors above. The package does make it possible to alter nuclear-physics inputs though (e.g. density matrices). As well as this, Jayden Newstead pointed me to his git repository on which he is developing (and is largely finished) a C++ version of this code.
+
+\section{Rescaling limits}
+
+The idea of 1307.5955\cite{Cirelli2013} is that eq. \ref{eq:master} is linear in the form factors, so one can in fact fold the halo integral into them as well. That is, defining new ``integrated form factors''
+%
+\begin{equation}
+  \mathscr{F}_{i,j}^{N,N'} \equiv \left\langle \frac{1}{v} F_{ij}^{N,N'} \right\rangle
+\end{equation}
+%
+one can rewrite the master equation as
+%
+\begin{equation}
+ \frac{\mathrm{d}R_D}{\mathrm{d}E_R} = N_T\frac{\rho_\chi m_T}{32\pi m_\chi^3 m_N^2} \sum_{ij}\sum_{N,N'=p,n} c_i^N c_j^{N'} \mathscr{F}_{i,j}^{N,N'} 
+ \label{eq:master}
+\end{equation}
+%
+They go further, and further fold in detector-dependent information to the form factors (cuts, acceptances, efficiencies etc.). The idea then is that once these integrated form factors are computed, they can be used to easily compute detector-level event predictions for any EFT-based model, where the particle physics is totally described by the $c_i^N$, which can then be compared to data.
+
+...stuff on rescaling...
+
+\section{CDMS analysis}
+
+Referring to 1503.03379\cite{Schneck2015}. Place limits on one effective operator at a time, i.e. only two (or just one) non-zero coefficients at a time, e.g. $c_1^p,c_1^n$, which they choose to express in the isoscalar-isovector basis, $c_i^0 = (1/2)\left(c_i^p + c_i^n \right)$ and $c_i^1 = (1/2)\left(c_i^p - c_i^n \right)$ respectively. See figs 1 and 2. They also look at the effect of the energy-dependence of some of the effective operators on limits (figs 3, 4).
+
+In section IV they get a bit trickier and try to find out which ``directions'' in the space of effective couplings different target nuclei are most sensitive to, which is influenced by interference effects between effective operators and nuclear properties. I'm not quite sure how this part works yet.
+
+
+\section{Recoil spectra}
+
+Plots of recoil spectrum shapes for individual relativistic and non-relativistic operators
+
+\captionsetup[subfloat]{position=top}
+\begin{figure}
+  \centering
+  \subfloat[][Fig A]{%
+    \includegraphics[width=0.5\linewidth]{XeComb_NR_EFTcoeffrecoilspectra.png}%
+    \label{fig:sub1}%
+  }
+  \subfloat[][Fig B]{%
+    \includegraphics[width=0.5\linewidth]{XeComb_R_EFTcoeffrecoilspectra.png}%
+    \label{fig:sub2}%
+  }
+  \caption{A figure with two subfigures}
+  \label{fig:test}
+\end{figure}
+
+Check that we can reproduce R plots using combinations of NR operators (Table 1 of documentation-standalone.pdf)
+
+% Dump figures before producing bibliography
+\clearpage
+
+% References are handled by BibTeX
+\bibliographystyle{utphys} % Referencing style
+\bibliography{DD_EFT} % The name of the .bib file
+
+\end{document}

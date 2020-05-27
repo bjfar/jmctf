@@ -1,0 +1,4 @@
+* As part of the testing, and to help people add new Analysis classes,
+  probably need a simple way of running test Analyses to make sure the
+  new classes fully work correctly and provide everything they are
+  supposed to.
