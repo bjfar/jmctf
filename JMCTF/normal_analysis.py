@@ -60,8 +60,57 @@ class NormalAnalysis(BaseAnalysis):
         # Naming is import for (TODO: can't remember?)
         tfds["x"] = norm
         tfds["x_theta"] = norm_theta
-
         return tfds
+
+    def scale_pars(self,pars,pre_scaled_pars):
+        """Return scaled signal and nuisance parameters
+           (scaled such that MLE's in this parameterisation have
+           variance of approx. 1)
+           If not supplied, default nuisance parameters are prepared
+           and scaled (mostly to help generate samples for nominal
+           signal/background cases, so users don't have to know what
+           all the nuisance parameters are and manually set them to
+           nominal values)
+        """
+        scaled_pars = {}
+        scaled_nuis = {}
+
+        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
+            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+            theta_in = tf.constant(0*pars['mu'])
+            if 'sigma_t' not in pars.keys():
+                # Default for when no extra "theory" uncertainty is provided
+                sigma_t_in = tf.constant(0*pars['mu'])
+            else:
+                sigma_t_in = pars['sigma_t'] 
+        else:
+            theta_in = pars['theta']
+            sigma_t_in = pars['sigma_t']
+
+        if pre_scaled_pars is None:
+            #print("Scaling input parameters...")
+            scaled_pars['mu']    = pars['mu'] / self.mu_scaling
+            scaled_nuis['theta'] = theta_in / self.theta_scaling
+        elif pre_scaled_pars=='nuis':
+            #print("Scaling only signal parameters: nuisanced parameters already scaled...")
+            scaled_pars['mu']    = pars['mu'] / self.mu_scaling
+            scaled_nuis['theta'] = theta_in
+        elif pre_scaled_pars=='all':
+            #print("No scaling applied: all parameters already scaled...")
+            scaled_pars['mu']    = pars['mu']
+            scaled_nuis['theta'] = theta_in
+        else:
+            raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
+
+        scaled_pars['sigma_t'] = sigma_t_in # Always treated as fixed, so no scaling ever needed
+        return scaled_pars, scaled_nuis, {'theta': pars['theta']}
+
+    def descale_pars(self,pars):
+        """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
+        descaled_pars = {}
+        if 'mu' in pars.keys():
+            descaled_pars['mu'] = pars['mu'] * self.mu_scaling
+        return descaled_pars
 
     def get_Asimov_samples(self,signal_pars):
         """Construct 'Asimov' samples for this analysis
@@ -102,11 +151,14 @@ class NormalAnalysis(BaseAnalysis):
     def get_all_tensorflow_variables(self,sample_dict):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model
            (initial guesses assume free 'mu' and 'theta')
+           Note that "sigma_t" is an extra theory or control measurement uncertainty
+           parameter that cannot be fit, and is always treated as fixed.
         """
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
         pars = {"mu": tf.Variable(x, dtype=float, name='mu'),
-                "theta": tf.Variable(x_theta, dtype=float, name='theta')}
+                "theta": tf.Variable(x_theta, dtype=float, name='theta'),
+                "sigma_t": tf.constant(0, dtype=float, name='sigma_t')}
         return pars
 
 

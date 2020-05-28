@@ -152,6 +152,49 @@ class BinnedAnalysis(BaseAnalysis):
 
         return tfds #, sample_layout, sample_count
 
+    def scale_pars(self,pars,pre_scaled_pars):
+        """Return scaled signal and nuisance parameters
+           (scaled such that MLE's in this parameterisation have
+           variance of approx. 1)
+           If not supplied, default nuisance parameters are prepared
+           and scaled (mostly to help generate samples for nominal
+           signal/background cases, so users don't have to know what
+           all the nuisance parameters are and manually set them to
+           nominal values)
+        """
+        scaled_pars = {}
+        scaled_nuis = {}
+        #print("pars:",pars)
+        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
+            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+            theta_in = tf.constant(0*pars['s'])
+        else:
+            theta_in = pars['theta']
+        if pre_scaled_pars is None:
+            #print("Scaling input parameters...")
+            scaled_pars['s']     = pars['s'] / self.s_scaling
+            scaled_nuis['theta'] = theta_in / self.theta_scaling
+        elif pre_scaled_pars=='nuis':
+            #print("Scaling only signal parameters: nuisanced parameters already scaled...")
+            scaled_pars['s']     = pars['s'] / self.s_scaling
+            scaled_nuis['theta'] = theta_in
+        elif pre_scaled_pars=='all':
+            #print("No scaling applied: all parameters already scaled...")
+            scaled_pars['s']     = pars['s']
+            scaled_nuis['theta'] = theta_in
+        else:
+            raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
+        return scaled_pars, scaled_nuis, {'theta': pars['theta']} 
+
+    def descale_pars(self,pars):
+        """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
+        descaled_pars = {}
+        if 's' in pars.keys():
+            descaled_pars['s'] = pars['s'] * self.s_scaling
+        if 'theta' in pars.keys(): 
+            descaled_pars['theta'] = pars['theta'] * self.theta_scaling
+        return descaled_pars
+
     def get_Asimov_samples(self,signal_pars):
         """Construct 'Asimov' samples for this analysis
            Used to detemine asymptotic distributions of 

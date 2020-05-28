@@ -1,6 +1,6 @@
 .. _quick_start:
 
-Quick start
+Not-so-quick start
 ============
 
 The principle pipeline which JMCtf is designed to streamline is
@@ -32,7 +32,7 @@ JMCTF is designed for jointly analysing many independent experiments simultaneou
    :start-after: make_norm
    :end-before: make_binned
 
-where the arguments are simple a name for the experiment, followed by the mean and standard deviation of the normal random variable. 
+where the arguments are simply a name for the experiment, followed by the mean and standard deviation of the normal random variable. 
 
 Next, an experiment consisting of several independent Poisson random variables, whose means are characterised in terms of a "signal" parameter (either fixed, or to be fitted) and a second "background" parameter constrained by a normally distributed control measurement:
 
@@ -42,29 +42,38 @@ Next, an experiment consisting of several independent Poisson random variables, 
 
 where a full description of the required bin definition data is given in the :py:class`.BinnedAnalysis` class documentation. 
 
-Not much can be done with these Analysis objects on their own; they act mainly as "blueprints" for experiments, to be used by other classes. The simplest such class is :py:class:`.JMCJoint`, which can do such things as jointly fit the parameters of many Analysis classes, and sample from the underlying distribution functions.
+Not much can be done with these Analysis objects on their own; they act mainly as "blueprints" for experiments, to be used by other classes. The simplest such class is :py:class:`.JointDistribution`, which can do such things as jointly fit the parameters of many Analysis classes, and sample from the underlying distribution functions [#jointdist]_.
 
-Creating a joint PDF object with :py:class:`.JMCJoint` is as simple as providing a list of component Analysis classes to the constructor:
+Creating a joint PDF object with :py:class:`.JointDistribution` is as simple as providing a list of component Analysis object to the constructor:
 
 .. literalinclude:: /../examples/quickstart.py
    :start-after: make_joint
    :end-before: get_structure
 
-Fitting the joint PDF to some data requires that the data be provided in an appropriately structured dictionary, so that samples can be assigned to the correct Analysis. The correct structure to use can be revealed by the :py:class`.JMCJoint.get_sample_structure` function::
+Fitting the joint PDF to some data requires that the data be provided in an appropriately structured dictionary, so that samples can be assigned to the correct Analysis. The correct structure to use can be revealed by the :py:class`.JointDistribution.get_sample_structure` function::
 
-    >>>> joint.get_sample_structure()
+    >>> joint.get_sample_structure()
     {'Test normal': {'x': 1, 'x_theta': 1}, 'Test binned': {'n': 2, 'x': 2}}
 
 Here the outer dictionary keys give the "experiment" names, the inner dictionary keys give the names of the random variables in each "experiment", and the inner dictionary values give the dimension of those random variables. For example we defined two bins in our :py:class:`.BinnedAnalysis`, so the dimension of the bin count random variable `n`, and control variable `x`, is 2.
 
-Knowing this information, we can construct a sample for the full joint PDF and compute its joint probability (density)::
+Knowing this information, we can construct a sample for the full joint PDF and fit the joint PDF to it:
 
-    >>>> my_sample = {'Test normal': {'x': 4.3, 'x_theta': 0}, 'Test binned': {'n': [9,53], 'x': [0,0]}}
-    >>>> joint.log_prob(my_sample)
+    >>> my_sample = {'Test normal': {'x': 4.3, 'x_theta': 0}, 'Test binned': {'n': [9,53], 'x': [0,0]}}
+    >>> q, joint_fitted, all_pars = joint.fit_all(my_sample)
+    >>> print(all_pars)
+    all_pars: {'Test normal': {'mu': <tf.Variable 'mu:0' shape=() dtype=float32, numpy=4.3>, 'theta': <tf.Variable 'theta:0' shape=() dtype=float32, numpy=0.0>, 'sigma_t': <tf.Tensor: id=57, shape=(), dtype=float32, numpy=0.0>}, 'Test binned': {'s': <tf.Variable 's:0' shape=(2,) dtype=float32, numpy=array([ 0.        , -0.23735635], dtype=float32)>, 'theta': <tf.Variable 'theta:0' shape=(2,) dtype=float32, numpy=array([0., 0.], dtype=float32)>}}
 
+The :py:class`.JointDistribution.fit_all` function fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. The parameter dictionary is not very pretty when printed because the variables are returned as TensorFlow tensors. 
+
+Here we have only fit the PDF to one sample, however the power of JMCTF really lies in fitting the PDF to many many samples quickly. Of course manually creating many samples is tedious and not very useful; a more standard workflow is to actually *sample* the samples from the PDF under some fixed "null hypothesis" parameter values. We cover this in the next section.
 
 Sample from the joint distribution
 ----------------------------------
+
+In the previous section, having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it:
+
+
 
 Now that we have an object describing our joint PDF, we can sample
 from it in a scipy.stats manner:
@@ -235,3 +244,9 @@ Please note the following:
   finding MLEs for your parameters requires solving a difficult
   global optimisation problem then this package cannot help you,
   sorry!
+
+.. rubric:: Footnotes
+
+(Note, the crappy formatting of these footnotes is fixed in later versions of the sphinx_rtd_theme, and should go away as soon as readthedocs adopt a new release of it)
+
+.. [#jointdist] As you might guess from the name, the :py:class:`.JointDistribution` class inherits from :py:class:`tensorflow_probability.JointDistributionNamed`. So all the standard log probability and sampling methods etc. from tensorflow_probability are available.

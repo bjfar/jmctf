@@ -102,3 +102,14 @@ def deep_merge(a, b):
             for key in keys
         }
 
+def add_prefix(prefix,d):
+    """Append the supplied string to all keys in the supplied dictionary.
+       Used to add unique prefixes to sample/parameter names to avoid
+       clashes when analyses are combined into one big tensorflow_probability
+       model"""
+    return {"{0}::{1}".format(prefix,key): val for key,val in d.items()}
+   
+def remove_prefix(prefix,d):
+    """Inverse of add_prefix"""
+    return {key.split("{0}::".format(prefix))[1]: val for key,val in d.items()}
+

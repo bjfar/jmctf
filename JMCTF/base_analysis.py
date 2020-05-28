@@ -12,5 +12,3 @@ class BaseAnalysis:
         data = self.get_observed_samples() # Might as well infer it from this data
         structure = {key: val.shape[-1] for key,val in data.items()}
         return structure
-
- 

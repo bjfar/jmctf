@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow_probability import distributions as tfd
 import massminimize as mm
+from . import common as c
 
 def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     """General -2logL function to optimise"""
@@ -88,15 +89,16 @@ class JointDistribution(tfd.JointDistributionNamed):
         self.analyses = {a.name: a for a in analyses}
         self.Osamples = {}
         for a in self.analyses.values():
-           self.Osamples.update(a.get_observed_samples())
+           self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
-            self.pars = self.prepare_pars(pars,pre_scaled_pars)
+            #print("pars:", pars)
+            self.pars = self.scale_pars(pars,pre_scaled_pars)
             dists = {} 
             self.Asamples = {}
-            for a in analyses.values():
-                d = a.tensorflow_model(self.pars[a.name])
+            for a in self.analyses.values():
+                d = c.add_prefix(a.name,a.tensorflow_model(self.pars[a.name]))
                 dists.update(d)
-                self.Asamples.update(a.get_Asimov_samples(self.pars[a.name]))
+                self.Asamples.update(c.add_prefix(a.name,a.get_Asimov_samples(self.pars[a.name])))
             super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
             self.dists = dists
         # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
@@ -120,67 +122,62 @@ class JointDistribution(tfd.JointDistributionNamed):
        logw = self.log_prob(samples) - biased_joint.log_prob(samples) # log(weight) for each sample
        return samples, logw
 
-    def prepare_pars(self,pars,pre_scaled_pars):
+    def scale_pars(self,pars,pre_scaled_pars):
         """Prepare default nuisance parameters and return scaled signal and nuisance parameters for each analysis
            (scaled such that MLE's in this parameterisation have
            variance of approx. 1"""
-           # TODO: Needs big changes to generalise beyond BinnedAnalysis
         scaled_pars = {}
         #print("pars:",pars)
-        for aname,a in self.analyses.items():
-            pardict = pars[aname]
-            scaled_pars[aname] = {}
-            if 'nuisance' in pardict.keys() and pardict['nuisance'] is None:
-                # trigger shortcut to set nuisance parameters to zero, for sample generation. 
-                theta_in = tf.constant(0*pardict['s'])
-            else:
-                theta_in = pardict['theta']
+        for a in self.analyses.values():
+            if a.name not in pars.keys(): raise KeyError("Parameters for analysis {0} not found!".format(a.name)) 
+            s_pars, s_nuis, us_nuis = a.scale_pars(pars[a.name],pre_scaled_pars)
+
+            # Logic to avoid applying scaling to parameters supplied with scaling already applied
             if pre_scaled_pars is None:
                 #print("Scaling input parameters...")
-                scaled_pars[aname]['s']     = pardict['s'] / a.s_scaling
-                scaled_pars[aname]['theta'] = theta_in / a.theta_scaling
+                scaled_pars[a.name] = {**s_pars, **s_nuis}    
             elif pre_scaled_pars=='nuis':
-                #print("Scaling only signal parameters: nuisanced parameters already scaled...")
-                scaled_pars[aname]['s']     = pardict['s'] / a.s_scaling
-                scaled_pars[aname]['theta'] = theta_in
+                #print("Scaling only signal parameters: nuisance parameters already scaled...")
+                scaled_pars[a.name] = {**s_pars, **us_nuis}
             elif pre_scaled_pars=='all':
                 #print("No scaling applied: all parameters already scaled...")
-                scaled_pars[aname]['s']     = pardict['s']
-                scaled_pars[aname]['theta'] = theta_in
-            else:
-                raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
+                scaled_pars[a.name] = pars[a.name]
+
         return scaled_pars 
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
         descaled_pars = {}
-        for ka,a in self.analyses.items():
-          if ka in pars.keys():
-            pardict = pars[ka]
-            descaled_pars[ka] = {}
-            if 's' in pardict.keys():     descaled_pars[ka]['s']     = pardict['s'] * a.s_scaling
-            if 'theta' in pardict.keys(): descaled_pars[ka]['theta'] = pardict['theta'] * a.theta_scaling
+        for a in self.analyses.values():
+          if a.name in pars.keys():
+            descaled_pars[a.name] = a.descale_pars(pars[a.name])
         return descaled_pars
 
     def get_nuis_parameters(self,signal,samples):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
         for a in self.analyses.values():
-            pars[a.name] = a.get_nuisance_tensorflow_variables(samples,signal[a.name])
+            pars[a.name] = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),signal[a.name])
         return pars
+
+    def get_samples_for(self,name,samples):
+        """Extract the samples for a specific analysis from a sample dictionary, and
+           remove the analysis name prefix from the keys"""
+        d = {key:val for key,val in samples.items() if key.startswith("{0}::".format(name))}
+        return c.remove_prefix(name,d)
 
     def get_all_parameters(self,samples):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
         for a in self.analyses.values():
-            pars[a.name] = a.get_all_tensorflow_variables(samples[a.name])
+            pars[a.name] = a.get_all_tensorflow_variables(self.get_samples_for(a.name,samples))
         return pars
 
     def get_sample_structure(self):
         """Returns a dictionary whose structure is the same as samples from the joint PDF"""
         out = {}
         for a in self.analyses.values():
-            out[a.name] = a.get_sample_structure()
+            out.update(c.add_prefix(a.name,a.get_sample_structure()))
         return out
 
     def fit_nuisance(self,signal,samples,log_tag='',verbose=False):
@@ -213,10 +210,25 @@ class JointDistribution(tfd.JointDistributionNamed):
         joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
         return q, joint_fitted, pars
   
-    def fit_all(self,samples,log_tag='',verbose=False):
+    def fit_all(self,samples,fixed_pars={},log_tag='',verbose=False):
         """Fit all signal and nuisance parameters to samples
-           (ignores parameters that were used to construct this object)"""
+           (ignores parameters that were used to construct this object)
+           Some special parameters within analyses are also flagged as
+           un-fittable, e.g. theory uncertainty parameters. If these
+           aren't provided then analyses will use default fixed values,
+           but they can be supplied via the "fixed_pars" dict. These
+           parameters are always treated as fixed, when it comes to
+           starting MLE guesses etc.
+        """
+        # Make sure the samples are TensorFlow objects of the right type:
+        samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
         all_pars = self.get_all_parameters(samples)
+        # Deal with extra fixed parameters
+        for analysis,pardict in fixed_pars.items():
+            for par,val in pardict.items():
+                if par not in all_pars[analysis].keys(): 
+                    raise ValueError("Fixed parameter {0} for analysis {1} was not found among the parameters for that analysis! Please check that you have used the correct parameter name.".format(par,analysis)) 
+                all_pars[analysis][par] = tf.constant(val, dtype=float, name=par)
         joint_fitted, q = optimize(all_pars,None,self.analyses,samples,pre_scaled_pars='all',log_tag=log_tag,verbose=verbose)
         return q, joint_fitted, all_pars
 
