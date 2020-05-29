@@ -3,15 +3,13 @@
 Not-so-quick start
 ============
 
-The principle pipeline which JMCtf is designed to streamline is
+The principal pipeline which JMCtf is designed to streamline is
 the following:
 
 1. :ref:`combine_into_joint`
 2. :ref:`sample_from_joint`
-3. :ref:`build_model`  
-4. :ref:`find_MLEs` for parameters (for many
-   samples/trials, in parallel)
-5. :ref:`build_test_stats` 
+3. :ref:`find_MLEs`
+4. :ref:`build_test_stats` 
 
 Getting more advanced, we can loop over the whole procedure to simultaneously test many alternate hypotheses and compute :ref:`trial_corrections`, as well as define new :ref:`analysis` classes to extend JMCtf with new component probability distributions.
 
@@ -20,230 +18,179 @@ A fast introduction to the package, then, is to see an example of this pipeline 
 .. _combine_into_joint:
 
 Combine independent "analyses" into a joint distribution
---------------------------------------------------------------------
+--------------------------------------------------------
 
 .. _scipy.stats: https://docs.scipy.org/doc/scipy/reference/stats.html
 
 The basic components in JMCTF are "analyses". These are objects describing the joint PDF of a single "analysis" or "experiment", for example an experiment searching for a signal in a series of Poisson "bins" or signal regions, or simply a normal random variable representing an experimental measurement. But these "analysis" objects do more than just describe the PDF of the experiment; they are responsible for constructing the TensorFlow probability model for the experiment (basically the PDF), for providing good starting guesses for distribution parameters based on sample realizations, for scaling parameters such that their MLEs have approximately unit variance (to help out the TensorFlow minimisation routines), for providing Asimov samples, and for keeping track of the sample structure. :ref:`adding_new_analysis_classes` is somewhat involved so it is covered separately.
 
-JMCTF is designed for jointly analysing many independent experiments simultaneously. So to begin, let us create two simple experiments. First, a simple normal random variable, characterised by a mean and standard deviation. This can be created from the :py:class:`.NormalAnalysis` class:
+JMCTF is designed for jointly analysing many independent experiments simultaneously. So to begin, let us create two simple experiments. First, a simple normal random variable, characterised by a mean and standard deviation. This can be created from the :py:class:`.NormalAnalysis` class::
 
-.. literalinclude:: /../examples/quickstart.py
-   :start-after: make_norm
-   :end-before: make_binned
+   >>> from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
+   >>> norm = NormalAnalysis("Test normal", 5, 2)
 
 where the arguments are simply a name for the experiment, followed by the mean and standard deviation of the normal random variable. 
 
-Next, an experiment consisting of several independent Poisson random variables, whose means are characterised in terms of a "signal" parameter (either fixed, or to be fitted) and a second "background" parameter constrained by a normally distributed control measurement:
+Next, an experiment consisting of several independent Poisson random variables, whose means are characterised in terms of a "signal" parameter (either fixed, or to be fitted) and a second "background" parameter constrained by a normally distributed control measurement::
 
-.. literalinclude:: /../examples/quickstart.py
-   :start-after: make_binned
-   :end-before: make_joint
+   >>> # (name, n, b, sigma_b)
+   >>> bins = [("SR1", 10, 9, 2),
+   ...         ("SR2", 50, 55, 4)]
+   >>> binned = BinnedAnalysis("Test binned", bins)
 
 where a full description of the required bin definition data is given in the :py:class`.BinnedAnalysis` class documentation. 
 
 Not much can be done with these Analysis objects on their own; they act mainly as "blueprints" for experiments, to be used by other classes. The simplest such class is :py:class:`.JointDistribution`, which can do such things as jointly fit the parameters of many Analysis classes, and sample from the underlying distribution functions [#jointdist]_.
 
-Creating a joint PDF object with :py:class:`.JointDistribution` is as simple as providing a list of component Analysis object to the constructor:
+Creating a joint PDF object with :py:class:`.JointDistribution` is as simple as providing a list of component Analysis object to the constructor::
 
-.. literalinclude:: /../examples/quickstart.py
-   :start-after: make_joint
-   :end-before: get_structure
+   >>> joint = JointDistribution([norm,binned])
 
 Fitting the joint PDF to some data requires that the data be provided in an appropriately structured dictionary, so that samples can be assigned to the correct Analysis. The correct structure to use can be revealed by the :py:class`.JointDistribution.get_sample_structure` function::
 
     >>> joint.get_sample_structure()
-    {'Test normal': {'x': 1, 'x_theta': 1}, 'Test binned': {'n': 2, 'x': 2}}
+    {'Test normal::x': 1, 'Test normal::x_theta': 1, 'Test binned::n': 2, 'Test binned::x': 2}
 
-Here the outer dictionary keys give the "experiment" names, the inner dictionary keys give the names of the random variables in each "experiment", and the inner dictionary values give the dimension of those random variables. For example we defined two bins in our :py:class:`.BinnedAnalysis`, so the dimension of the bin count random variable `n`, and control variable `x`, is 2.
+Here the dictionary keys are in the format `analysis_name::random_variable_name` and the values give the dimension of those random variables. For example we defined two bins in our :py:class:`.BinnedAnalysis`, so the dimension of the bin count random variable `Test binned::n`, and control variable `Test binned::x`, is 2.
 
-Knowing this information, we can construct a sample for the full joint PDF and fit the joint PDF to it:
+Knowing this information, we can manually construct a sample for the full joint PDF and fit the joint PDF to it::
 
-    >>> my_sample = {'Test normal': {'x': 4.3, 'x_theta': 0}, 'Test binned': {'n': [9,53], 'x': [0,0]}}
+    >>> my_sample = {'Test normal::x': 4.3, \
+    ...              'Test normal::x_theta': 0, \
+    ...              'Test binned::n': [9,53], \
+    ...              'Test binned::x': [0,0]}
+
     >>> q, joint_fitted, all_pars = joint.fit_all(my_sample)
     >>> print(all_pars)
-    all_pars: {'Test normal': {'mu': <tf.Variable 'mu:0' shape=() dtype=float32, numpy=4.3>, 'theta': <tf.Variable 'theta:0' shape=() dtype=float32, numpy=0.0>, 'sigma_t': <tf.Tensor: id=57, shape=(), dtype=float32, numpy=0.0>}, 'Test binned': {'s': <tf.Variable 's:0' shape=(2,) dtype=float32, numpy=array([ 0.        , -0.23735635], dtype=float32)>, 'theta': <tf.Variable 'theta:0' shape=(2,) dtype=float32, numpy=array([0., 0.], dtype=float32)>}}
+    {'Test normal': 
+     {'mu': <tf.Variable 'mu:0' shape=() dtype=float32, numpy=4.3>, 
+      'theta': <tf.Variable 'theta:0' shape=() dtype=float32, numpy=0.0>, 
+      'sigma_t': <tf.Tensor: id=57, shape=(), dtype=float32, numpy=0.0>}, 
+    'Test binned': 
+     {'s': <tf.Variable 's:0' shape=(2,) dtype=float32, numpy=array([ 0.        , -0.23735635], dtype=float32)>, 
+      'theta': <tf.Variable 'theta:0' shape=(2,) dtype=float32, numpy=array([0., 0.], dtype=float32)>}}
 
-The :py:class`.JointDistribution.fit_all` function fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. The parameter dictionary is not very pretty when printed because the variables are returned as TensorFlow tensors. 
+The output is not so pretty because the parameters are TensorFlow objects. We can convert them to numpy for better viewing::
 
-Here we have only fit the PDF to one sample, however the power of JMCTF really lies in fitting the PDF to many many samples quickly. Of course manually creating many samples is tedious and not very useful; a more standard workflow is to actually *sample* the samples from the PDF under some fixed "null hypothesis" parameter values. We cover this in the next section.
+    >>> def to_numpy(d):
+    ...    out = {}
+    ...    for k,v in d.items():
+    ...        if isinstance(v, dict): out[k] = to_numpy(v)
+    ...        else: out[k] = v.numpy()
+    ...    return out
+    >>> print(to_numpy(all_pars))
+    {'Test normal': 
+      {'mu': 4.3, 'theta': 0.0, 'sigma_t': 0.0}, 
+     'Test binned': 
+      {'s': array([ 0.        , -0.23735635], dtype=float32), 
+       'theta': array([0., 0.], dtype=float32)}}
+
+The :py:class`.JointDistribution.fit_all` function fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. 
+
+Here we have only fit the PDF to one sample, however the power of JMCTF really lies in fitting the PDF to lots of samples quickly. Of course manually creating lots of samples is tedious and not very useful; a more standard workflow is to actually *sample* the samples from the PDF under some fixed "null hypothesis" parameter values. We cover this in the next section.
+
+.. _sample_from_joint:
 
 Sample from the joint distribution
 ----------------------------------
 
-In the previous section, having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it:
+In the previous section, having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it::
 
+   >>> samples = joint_fitted.sample(3)
+   >>> print(to_numpy(samples))
+   {'Test normal::x_theta': array([0., 0., 0.], dtype=float32), 
+    'Test normal::x': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
+    'Test binned::x': array([[[-3.0337536, -1.6310872]],
+                             [[-4.0343146,  1.5532861]],
+                             [[-2.800459 , -0.7948484]]], dtype=float32), 
+    'Test binned::n': array([[[ 8., 40.]],
+                             [[ 2., 50.]],
+                             [[ 7., 60.]]], dtype=float32)}
 
+As before, we can fit our distribution to these samples, and this time we will obtain maximum likelihood estimators for each sample independently::
 
-Now that we have an object describing our joint PDF, we can sample
-from it in a scipy.stats manner:
+    >>> q_3, joint_fitted_3, all_pars_3 = joint.fit_all(samples)
+    >>> print(to_numpy(all_pars_3))>
+    {'Test normal': 
+     {'mu': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
+      'theta': array([0., 0., 0.], dtype=float32), 
+      'sigma_t': 0.0}, 
+     'Test binned': 
+     {'s': array([[[ 0.5640617 , -1.586598  ]],
+                  [[-0.82253313, -0.7777322 ]],
+                  [[ 0.22200736,  0.68772215]]], dtype=float32), 
+      'theta': array([[[-1.5168768 , -0.4077718 ]],
+                      [[-2.0171573 ,  0.38832152]],
+                      [[-1.4002295 , -0.1987121 ]]], dtype=float32)}}
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: sample_pdf
-   :end-before: check_pdf
+Note that `sigma_t` is not considered a free parameter in the `BinnedAnalysis` class, which is why it still only has one value (for more on this see the :py:class:`.BinnedAnalysis` class documentation).
 
-We can also evaluate the joint PDF, and compare it to our samples to
-check that they seem reasonable:
+Also note that we cannot fit to all the samples simultaneously, i.e. we don't use each sample as independent information all contributing simultaneously to knowledge of the underlying parameters. JMCTF is designed for performing Monte Carlo simulations of scientific experiments that run just once (such as a search for new particles at the Large Hadron Collider), so each sample is treated as pseudodata whose main purpose is to help us understand the distributions of test statistics. In this view each sample is an independent pseudo-experiment. If an experiment is in fact to be run multiple times in reality, then the PDF of the underlying Analysis class needs to reflect this by using random variables of the appropriate dimension; or for example by using two normal random variables rather than one if the experiment runs twice. 
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: check_pdf
-   :end-before: build_model
-
-.. figure:: /../../tests/docs_examples/example_2D_joint.svg
-   :scale: 50%
-   :alt: pdf_VS_samples
-
-   Contours of the PDF of the joint distribution, with samples overlayed.
-
-.. _build_model:
-
-Build relationships between model parameters and distribution parameters
-------------------------------------------------------------------------
-
-In JMCtools a `model` consists of two main components: a 
-:py:class:`.JointModel`, and a list of functions which take some
-abstract parameters and return the arguments needed to evaluate the
-distribution functions managed by the :py:class:`.JointModel`. These
-are combined via the :py:class:`.ParameterModel` class.
-
-For example, if we leave the variances of our two normal distributions
-fixed, and take the means as independent parameters, we can construct
-a simple two parameter model as follows:
-
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: build_model
-   :end-before: block_structure
-
-For the purposes of efficiently finding maximum likelihood estimators
-for these parameters, the :py:class:`.ParameterModel` class 
-automatically infers the block structure of the model. That is, it
-figures out which blocks of parameters are needed to evaluate which
-distribution functions. In our example the two parameters 
-independently fix the means of each normal distribution, so our
-2D model can be broken down into two independent 1D models. We can
-see that the :py:class:`.ParameterModel` object has noticed this
-by inspecting its :code:`blocks` attribute:
-
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: block_structure
-   :end-before: alt_model
-
-which produces::
-
-   >>> {(deps=['a'], submodels=[0]), (deps=['b'], submodels=[1])}
-
-Here the output is telling us that one parameter block depends on the
-parameter `a`, and fixes the arguments of the 0th component of the
-:py:class:`.JointModel`, and a second parameter block depends on `b`
-and fixes the 1th joint distribution component.
-
-As a quick aside, it is useful to see what happens if the model
-parameters correlate the arguments of the joint distribution
-components:
-
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: alt_model
-   :end-before: sim_data
-
-which produces::
-
-   >>> {(deps=['a', 'b'], submodels=[0, 1])}
-
-So now, there is only one parameter block, that depends on both
-parameters and fixes the arguments of both joint distribution
-components. The important difference is that now this block will
-require a 2D optimisation in order to locate the maximum 
-likelihood estimators for `a` and `b`, whereas previously they
-could be found by two independent 1D optimisations (which is
-much faster).
+But that is getting complicated, so back to the quick-start.
 
 .. _find_MLEs:
 
-Find maximum likelihood estimators
-----------------------------------
+Fit MLEs to samples under a hypothesis (or many hypotheses) 
+-----------------------------------------------------------
 
-Now that we have a :py:class:`.ParameterModel`, we can use it
-to find maximum likelihood estimators for all the parameters
-that we have defined. This is made simple by the 
-:py:func:`find_MLE_parallel` member function, which can
-find MLEs for each simulated dataset, splitting the task
-over multiple processes if desired. 
+In the above example, we generated samples from a distribution that was fit to some data that we manually invented. But that is a weird thing to do. More conventionally we want to generate samples under a pre-defined *null hypothesis*, and use them to understand the distribution of some test statistic under that hypothesis. To do this, it is the parameter values that we want to fix manually, not the samples. We can supply these to the constructor of a `JointDistribution` object, however we can also introspect a parameter-less `JointDistribution` to determine what parameters are required in the event that we want to fix them::
 
-We simulated some data earlier using the :py:class:`.JointModel`
-class, but we can also simulate it directly
-from the :py:class:`.ParameterModel`:
+    >>> free, fixed, nuis = joint.get_parameter_structure()
+    >>> print(free)
+    {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: sim_data
-   :end-before: find_MLEs
+As with the sample structure introspection, this dictionary tells us which free parameters we need to supply, and what their dimension should be. The other dictionaries, `fixed` and `nuis`, tell us the structure of `fixed` and `nuisance` parameters respectively. The analyses themselves know sensible null hypothesis values for these, so we don't have to supply them, though we do have to explictly ask for the default values by setting the 'nuisance' dictionary key to `None`. See **TODO** for more details.
 
-Note that the shape of the simulated data is important. The
-length of the last dimension is interpreted as the number of
-draws from the joint distribution per `trial` or pseudoexperiment. 
-In this way, one can easily find the MLEs given multiple independent
-draws. But for simplicity we here do just one draw per experiment. 
-(For more complicated scenarios where different components of the
-joint distribution require different numbers of "draws", one must
-manually construct the appropriate :py:class:`.JointModel` before
-wrapping it in a :py:class:`.ParameterModel`.) 
+So, let us define a null hypothesis, sample from it, and then find MLEs for all parameters for all those sample:
 
-Finding the MLEs requires setting some options for the chosen
-optimisation method and then simply calling 
-:py:func:`find_MLE_parallel`
+    >>> #TODO: Internally ensure float32 format to avoid this verbosity?
+    >>> null = {'Test normal': {'mu': np.array([[0.]],dtype='float32'), 'nuisance': None}, 
+    ...         'Test binned': {'s': np.array([[0., 0.]],dtype='float32'), 'nuisance': None}}
+    >>> joint_null = joint.fix_parameters(null)
+    >>> # or alternatively one can supply parameters to the constructor:
+    >>> # joint_null = JointDistribution([norm,binned],null)
+    >>> samples = joint_null.sample(3)
+    >>> q_null, joint_fitted_null, all_pars_null = joint_null.fit_all(samples)
+    >>> print(to_numpy(all_pars_null))
+    {'Test normal': 
+     {'mu': array([[[-2.4318216]],
+                  [[ 0.7213395]],
+                  [[-1.833349 ]]], dtype=float32), 
+      'theta': array([[[0.]],
+                      [[0.]],
+                      [[0.]]], dtype=float32), 
+      'sigma_t': 0.0}, 
+     'Test binned': 
+     {'s': array([[[ 0.68332815,  1.2073289 ]],
+                  [[-0.5019169 ,  0.8478795 ]],
+                  [[ 1.0781676 , -0.9483687 ]]], dtype=float32), 
+      'theta': array([[[-0.7318874, -1.5432839]],
+                      [[-0.0951565, -1.0360898]],
+                      [[-1.4436939,  1.2477738]]], dtype=float32)}}
+    >>> # Inspect shapes
+    >>> print({k1: {k2: v2.shape for k2,v2 in v1.items()} 
+    ...  for k1,v1 in to_numpy(all_pars_null).items()})
+    {'Test normal': {'mu': (3, 1, 1), 
+                     'theta': (3, 1, 1), 
+                     'sigma_t': ()}, 
+     'Test binned': {'s': (3, 1, 2), 
+                     'theta': (3, 1, 2)}}
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: find_MLEs
-   :end-before: compute_stats
+We now need to start discussing the input/output array shapes more carefully. You will notice that we have supplied the parameters as two-dimensional arrays, even though it seems like one dimension should be enough. This is because we can use the `JointDistribution` class to collect and fit samples from *many* hypothesis simultaneously. That is, we could supply many alternate input parameters at once (we will do this in section **TODO**). On the output side, the structure of the fitted MLEs also reflects this possibility. Take for example the shape of the MLE for the parameter `'s'` from the `Test binned` analysis. This is `(3, 1, 2)`: 3 is the sample dimension (we have three samples per hypothesis to fit), 1 is the hypothesis dimension (we only provided one input hypothesis), and 2 is the fundamental dimension of `'s'` (we have two bins in the analysis, each characterised by a single parameter).
+
+For simplicity, JMCTF is restricted to this three-dimensional form. Only one dimension for hypotheses, one dimension for samples, and one dimension for parameters is permitted. If you want to create e.g. a matrix of parameters in a custom Analysis class, it will need to be flattened when returning it to higher JMCTF classes, and if you want a multidimensional array of samples then you will need to sample them in 1D and then reshape. Likewise, arrays of input hypotheses will need to be appropriately flattened.
+
+**TODO** refer to more detailed shape discussion elsewhere?
 
 .. _build_test_stats:
 
-Construct test statistics
--------------------------
+Build and analyse test statistics
+---------------------------------
 
-.. _likelihood ratio: https://en.wikipedia.org/wiki/Likelihood-ratio_test 
+Now that we understand the basic machinery, we can start to do some statistics!
 
-The final step is to construct some test statistic of interest!
-Here we will compute a `likelihood ratio`_ test statistic:
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py
-   :start-after: compute_stats
-
-.. figure:: /../../tests/docs_examples/quickstart_LLR.svg
-   :scale: 50%
-   :alt: pdf_LLR
-
-   Simulated distribution of likelihood ratio test statistic (red), and
-   expected distribution according to asymptotic theory (black).
- 
-And that's it! Everything this package is good for is just an application
-of the above pipeline to different problems.
-
-The unadulterated code for the above examples can be viewed :ref:`here <quick start examples>`.
-
-Limitations
------------
-
-.. _iminuit: https://iminuit.readthedocs.io/en/latest/ 
-.. _curse of dimensionality: https://en.wikipedia.org/wiki/Curse_of_dimensionality 
-
-Please note the following:
-
-* The `grid` optimisation method is very fast for low-dimensional
-  problems, and very slow for dimensions larger than about 2 due to
-  the `curse of dimensionality`_. Note 
-  also that results will be poor if the resolution of the grid is not
-  sufficiently below the variance of the MLEs.
-
-* The `minuit` optimisation method needs a little help from you in 
-  order to get reliable results. The starting guess needs to put
-  the minimiser in the correct global minima, and the step size needs
-  to be small enough that Minuit doesn't jump out of this minima.
-  For more tips on using Minuit see the `iminuit`_ documentation. 
-
-* There are currently no global optimisers implemented. Thus, if
-  finding MLEs for your parameters requires solving a difficult
-  global optimisation problem then this package cannot help you,
-  sorry!
 
 .. rubric:: Footnotes
 

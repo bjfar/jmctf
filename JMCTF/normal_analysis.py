@@ -103,7 +103,7 @@ class NormalAnalysis(BaseAnalysis):
             raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
 
         scaled_pars['sigma_t'] = sigma_t_in # Always treated as fixed, so no scaling ever needed
-        return scaled_pars, scaled_nuis, {'theta': pars['theta']}
+        return scaled_pars, scaled_nuis, {'theta': theta_in}
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -130,6 +130,18 @@ class NormalAnalysis(BaseAnalysis):
         Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=float),0),0)
         Osamples["x_theta"] = tf.expand_dims(tf.expand_dims(tf.constant(0,dtype=float),0),0)
         return Osamples
+
+    def get_free_parameter_structure(self):
+        """Get a dictionary describing the structure of the free parameters in this analysis
+           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+        return {"mu": 1}
+
+    def get_fixed_parameter_structure(self):
+        """Get a dictionary describing the structure of the fixed parameters in this analysis
+           (i.e. parameters that can be altered along with the signal hypothesis in nuisance
+           parameter fits, but which are kept fixed during all fitting.
+           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+        return {"sigma_t": 1}
 
     def get_nuisance_parameter_structure(self):
         """Get a dictionary describing the nuisance parameter structure of this analysis.

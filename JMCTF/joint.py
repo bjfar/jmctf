@@ -105,6 +105,10 @@ class JointDistribution(tfd.JointDistributionNamed):
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
 
+    def fix_parameters(self, pars):
+       """Return a version of this JointDistribution object that has parameters fixed to the supplied values"""
+       return JointDistribution(self.analyses.values(), pars)
+
     def biased_sample(self, N, bias=1):
        """Sample from biased versions of all analyses and return them along their with sampling probability.
           For use in importance sampling.
@@ -179,6 +183,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         for a in self.analyses.values():
             out.update(c.add_prefix(a.name,a.get_sample_structure()))
         return out
+
+    def get_parameter_structure(self):
+        """Returns three dictionaries whose structure explains how parameters should be supplied
+           to this object"""
+        free  = {a.name: a.get_free_parameter_structure() for a in self.analyses.values()}
+        fixed = {a.name: a.get_fixed_parameter_structure() for a in self.analyses.values()}
+        nuis  = {a.name: a.get_nuisance_parameter_structure() for a in self.analyses.values()} 
+        return free, fixed, nuis
 
     def fit_nuisance(self,signal,samples,log_tag='',verbose=False):
         """Fit nuisance parameters to samples for a fixed signal
