@@ -1,0 +1,39 @@
+.. _sample_from_joint_long:
+
+Sample from the joint distribution
+----------------------------------
+
+In the previous section, having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it::
+
+   >>> samples = joint_fitted.sample(3)
+   >>> print(to_numpy(samples))
+   {'Test normal::x_theta': array([0., 0., 0.], dtype=float32), 
+    'Test normal::x': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
+    'Test binned::x': array([[[-3.0337536, -1.6310872]],
+                             [[-4.0343146,  1.5532861]],
+                             [[-2.800459 , -0.7948484]]], dtype=float32), 
+    'Test binned::n': array([[[ 8., 40.]],
+                             [[ 2., 50.]],
+                             [[ 7., 60.]]], dtype=float32)}
+
+As before, we can fit our distribution to these samples, and this time we will obtain maximum likelihood estimators for each sample independently::
+
+    >>> q_3, joint_fitted_3, all_pars_3 = joint.fit_all(samples)
+    >>> print(to_numpy(all_pars_3))>
+    {'Test normal': 
+     {'mu': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
+      'theta': array([0., 0., 0.], dtype=float32), 
+      'sigma_t': 0.0}, 
+     'Test binned': 
+     {'s': array([[[ 0.5640617 , -1.586598  ]],
+                  [[-0.82253313, -0.7777322 ]],
+                  [[ 0.22200736,  0.68772215]]], dtype=float32), 
+      'theta': array([[[-1.5168768 , -0.4077718 ]],
+                      [[-2.0171573 ,  0.38832152]],
+                      [[-1.4002295 , -0.1987121 ]]], dtype=float32)}}
+
+Note that `sigma_t` is not considered a free parameter in the `BinnedAnalysis` class, which is why it still only has one value (for more on this see the :py:class:`.BinnedAnalysis` class documentation).
+
+Also note that we cannot fit to all the samples simultaneously, i.e. we don't use each sample as independent information all contributing simultaneously to knowledge of the underlying parameters. JMCTF is designed for performing Monte Carlo simulations of scientific experiments that run just once (such as a search for new particles at the Large Hadron Collider), so each sample is treated as pseudodata whose main purpose is to help us understand the distributions of test statistics. In this view each sample is an independent pseudo-experiment. If an experiment is in fact to be run multiple times in reality, then the PDF of the underlying Analysis class needs to reflect this by using random variables of the appropriate dimension; or for example by using two normal random variables rather than one if the experiment runs twice. 
+
+But that is getting complicated, so back to the quick-start.

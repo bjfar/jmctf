@@ -47,7 +47,7 @@ class NormalAnalysis(BaseAnalysis):
         # Need to construct these shapes to match the event_shape, batch_shape, sample_shape 
         # semantics of tensorflow_probability.
 
-        #print("pars:",pars)
+        print("pars in model:",pars)
         tfds = {}
         mu = pars['mu'] * self.mu_scaling
         theta = pars['theta'] * self.theta_scaling 
@@ -75,33 +75,22 @@ class NormalAnalysis(BaseAnalysis):
         scaled_pars = {}
         scaled_nuis = {}
 
+        print("pars:", pars)
+
         if 'nuisance' in pars.keys() and pars['nuisance'] is None:
             # trigger shortcut to set nuisance parameters to zero, for sample generation. 
             theta_in = tf.constant(0*pars['mu'])
             if 'sigma_t' not in pars.keys():
                 # Default for when no extra "theory" uncertainty is provided
-                sigma_t_in = tf.constant(0*pars['mu'])
+                sigma_t_in = tf.constant(1e-10*pars['mu']) # TODO: Cannot use exactly zero
             else:
                 sigma_t_in = pars['sigma_t'] 
         else:
             theta_in = pars['theta']
             sigma_t_in = pars['sigma_t']
 
-        if pre_scaled_pars is None:
-            #print("Scaling input parameters...")
-            scaled_pars['mu']    = pars['mu'] / self.mu_scaling
-            scaled_nuis['theta'] = theta_in / self.theta_scaling
-        elif pre_scaled_pars=='nuis':
-            #print("Scaling only signal parameters: nuisanced parameters already scaled...")
-            scaled_pars['mu']    = pars['mu'] / self.mu_scaling
-            scaled_nuis['theta'] = theta_in
-        elif pre_scaled_pars=='all':
-            #print("No scaling applied: all parameters already scaled...")
-            scaled_pars['mu']    = pars['mu']
-            scaled_nuis['theta'] = theta_in
-        else:
-            raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
-
+        scaled_pars['mu']    = pars['mu'] / self.mu_scaling
+        scaled_nuis['theta'] = theta_in / self.theta_scaling
         scaled_pars['sigma_t'] = sigma_t_in # Always treated as fixed, so no scaling ever needed
         return scaled_pars, scaled_nuis, {'theta': theta_in}
 
@@ -110,6 +99,8 @@ class NormalAnalysis(BaseAnalysis):
         descaled_pars = {}
         if 'mu' in pars.keys():
             descaled_pars['mu'] = pars['mu'] * self.mu_scaling
+        if 'theta' in pars.keys(): 
+            descaled_pars['theta'] = pars['theta'] * self.theta_scaling
         return descaled_pars
 
     def get_Asimov_samples(self,signal_pars):
@@ -155,7 +146,10 @@ class NormalAnalysis(BaseAnalysis):
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
         mu = signal['mu'] # non-scaled!
-        sigma_t = signal['sigma_t']
+        if 'sigma_t' in signal.keys():
+            sigma_t = signal['sigma_t']
+        else:
+            sigma_t = 1e-20 # TODO: Cannot use exactly zero 
         theta_MLE = - ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
         thetas = {"theta": tf.Variable(theta_MLE, dtype=float, name='theta')} # Use exact "starting guess", assuming mu is fixed.
         return thetas
@@ -170,7 +164,7 @@ class NormalAnalysis(BaseAnalysis):
         x_theta = sample_dict["x_theta"]
         pars = {"mu": tf.Variable(x, dtype=float, name='mu'),
                 "theta": tf.Variable(x_theta, dtype=float, name='theta'),
-                "sigma_t": tf.constant(0, dtype=float, name='sigma_t')}
+                "sigma_t": tf.constant(1e-20, dtype=float, name='sigma_t')} # TODO: Cannot use exactly zero
         return pars
 
 

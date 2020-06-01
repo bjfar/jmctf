@@ -3,6 +3,7 @@
 Examples from quick start
 =========================
 
-Return to :ref:`quick start` guide.
+Return to :ref:`quick_start` guide.
 
-.. literalinclude:: /../../tests/docs_examples/quickstart.py 
+..
+   .. literalinclude:: /../../tests/docs_examples/quickstart.py 

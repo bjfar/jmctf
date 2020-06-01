@@ -1,7 +1,0 @@
-JMCtools
-========
-
-.. toctree::
-   :maxdepth: 4
-
-   JMCtools

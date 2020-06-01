@@ -1,0 +1,23 @@
+.. _package_contents
+
+JMCTF package
+================
+
+Module contents
+---------------
+
+.. automodule:: JMCTF
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+Submodules
+----------
+
+JMCtools.common module
+----------------------
+
+.. automodule:: JMCtools.common
+    :members:
+    :undoc-members:
+    :show-inheritance:

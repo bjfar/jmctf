@@ -1,0 +1,17 @@
+.. _basics:
+
+Basic usage
+=========================
+
+In these sections you can find explanations and demonstrations on the basic usage of JMCTF to perform Monte Carlo analysis of likelihood-based test statistics. The structure loosely follows that of the :ref:`quick_start` guide, but with more details. 
+
+.. toctree::
+
+   combine_into_joint
+   sample_from_joint
+
+..
+   usage/Basics/sample_from_joint
+   usage/Basics/find_MLEs
+   usage/Basics/build_test_stats
+

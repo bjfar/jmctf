@@ -3,6 +3,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow_probability import distributions as tfd
+from collections.abc import Mapping
 import massminimize as mm
 from . import common as c
 
@@ -15,10 +16,15 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     if const_pars is None:
         all_pars = pars_t
     else:
-        all_pars = com.deep_merge(const_pars,pars_t)
+        all_pars = c.deep_merge(const_pars,pars_t)
     #print("all_pars:",all_pars)
+    print("In neg2LogL: a")
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
+    print("In neg2LogL: b")
+    print("data:",data)
     q = -2*joint.log_prob(data)
+    print("q:", q)
+    print("In neg2LogL: c")
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
 
@@ -53,7 +59,9 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
         if verbose: print("Beginning optimisation")
         #f = tf.function(mm.tools.func_partial(neg2LogL,**kwargs))
         f = mm.tools.func_partial(neg2LogL,**kwargs)
+        print("going into mm...")
         q, none, none = mm.optimize(pars, f, **opts)
+        print("mm finished!")
     # Rebuild distribution object with fitted parameters
     if transform is not None:
         pars_t = transform(pars)
@@ -62,7 +70,7 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
     if const_pars is None:
         all_pars = pars_t
     else:
-        all_pars = com.deep_merge(const_pars,pars_t)
+        all_pars = c.deep_merge(const_pars,pars_t)
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
     return joint, q
 
@@ -91,8 +99,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         for a in self.analyses.values():
            self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
-            #print("pars:", pars)
-            self.pars = self.scale_pars(pars,pre_scaled_pars)
+            # Convert parameters to the correct sort of TensorFlow object
+            pars_tf = self.convert_to_TF(pars)
+            self.pars = self.scale_pars(pars_tf,pre_scaled_pars)
             dists = {} 
             self.Asamples = {}
             for a in self.analyses.values():
@@ -104,6 +113,22 @@ class JointDistribution(tfd.JointDistributionNamed):
         # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
+
+    def convert_to_TF(self, d):
+       """Convert bottom-level entries of dictionary to TensorFlow objects, so long as they are numeric data"""
+       out = {}
+       for k,val in d.items():
+           if k is 'nuisance': # Special key we reserve for treating nuisance parameters.
+               out[k] = val
+           elif isinstance(val, Mapping):
+               out[k] = self.convert_to_TF(val) # We must go deeper
+           else:
+               try:
+                   out[k] = tf.Variable(val, dtype=float)
+               except Exception as e:
+                   msg = "Failed to convert values for key {0} to TensorFlow format! See associated exception for more information. Values were: {1}".format(k,val)
+                   raise ValueError(msg) from e
+       return out
 
     def fix_parameters(self, pars):
        """Return a version of this JointDistribution object that has parameters fixed to the supplied values"""
@@ -161,7 +186,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
         for a in self.analyses.values():
-            pars[a.name] = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),signal[a.name])
+            pars[a.name] = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),self.convert_to_TF(signal[a.name]))
         return pars
 
     def get_samples_for(self,name,samples):
@@ -216,7 +241,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                 for kp,p in a.items():
                     sig_out[ka][kp] = mu*p
             nuis_pars = {k:v for k,v in pars.items() if k is not 'mu'}
-            out = com.deep_merge(nuis_pars,sig_out) # Return all signal and nuisance parameters, but not mu.
+            out = c.deep_merge(nuis_pars,sig_out) # Return all signal and nuisance parameters, but not mu.
             return out 
         pars['mu'] = muV # TODO: Not attached to any analysis, but might work anyway  
         joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
@@ -429,7 +454,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("theta_prof_dict:", theta_prof_dict)
         #print("signal:", signal)
         # Compute -2*log_prop
-        joint = JointDistribution(self.analyses.values(),com.deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
+        joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
         q = -2*joint.log_prob(samples)
         return q
 

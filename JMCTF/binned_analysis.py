@@ -170,20 +170,8 @@ class BinnedAnalysis(BaseAnalysis):
             theta_in = tf.constant(0*pars['s'])
         else:
             theta_in = pars['theta']
-        if pre_scaled_pars is None:
-            #print("Scaling input parameters...")
-            scaled_pars['s']     = pars['s'] / self.s_scaling
-            scaled_nuis['theta'] = theta_in / self.theta_scaling
-        elif pre_scaled_pars=='nuis':
-            #print("Scaling only signal parameters: nuisanced parameters already scaled...")
-            scaled_pars['s']     = pars['s'] / self.s_scaling
-            scaled_nuis['theta'] = theta_in
-        elif pre_scaled_pars=='all':
-            #print("No scaling applied: all parameters already scaled...")
-            scaled_pars['s']     = pars['s']
-            scaled_nuis['theta'] = theta_in
-        else:
-            raise ValueError("Invalid value of 'pre_scaled_pars' option! Please choose one of (None,'all','nuis)")
+        scaled_pars['s']     = pars['s'] / self.s_scaling
+        scaled_nuis['theta'] = theta_in / self.theta_scaling
         return scaled_pars, scaled_nuis, {'theta': theta_in} 
 
     def descale_pars(self,pars):

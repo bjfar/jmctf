@@ -15,6 +15,7 @@ bins = [("SR1", 10, 9, 2),
 binned = BinnedAnalysis("Test binned", bins)
 # make_joint
 joint = JointDistribution([norm,binned])
+#joint = JointDistribution([binned])
 # get_structure
 print("Sample structure:",joint.get_sample_structure()) 
 # >> {'Test normal': {'x': 1, 'x_theta': 1}, 'Test binned': {'n': 2, 'x': 2}} 
@@ -46,12 +47,36 @@ print(to_numpy(all_pars_3))
 free, fixed, nuis = joint.get_parameter_structure()
 print("free:", free)
 
-null = {'Test normal': {'mu': np.array([[0.]],dtype='float32'), 'nuisance': None}, 'Test binned': {'s': np.array([[0., 0.]],dtype='float32'), 'nuisance': None}}
+null = {'Test normal': {'mu': [0.], 'nuisance': None}, 'Test binned': {'s': [(0., 0.)], 'nuisance': None}}
 joint_null = joint.fix_parameters(null)
 # or alternatively one can supply parameters to the constructor:
 # joint_null = JointDistribution([norm,binned],null)
 samples = joint_null.sample(3)
-q_null, joint_fitted_null, all_pars_null = joint_null.fit_all(samples)
+q_fit, joint_fitted_null, all_pars_null = joint_null.fit_all(samples)
 print(to_numpy(all_pars_null))
 # Inspect shapes
 print({k1: {k2: v2.shape for k2,v2 in v1.items()} for k1,v1 in to_numpy(all_pars_null).items()})
+
+# Ramp it up, plot all samples, plot MLEs.
+samples = joint_null.sample(1e6)
+shapes = {k: v.shape for k,v in samples.items()}
+print(shapes)
+q_fit, joint_fitted_null, all_pars_null = joint.fit_all(samples)
+
+#import matplotlib.pyplot as plt
+#from JMCTF.plotting import plot_sample_dist
+#fig = plot_sample_dist(samples)
+##plt.show()
+#fig.tight_layout()
+#fig.savefig("quickstart_sample_dists.svg")
+
+#from JMCTF.plotting import plot_MLE_dist
+#q_null, joint_fitted_null, all_pars_null = joint_null.fit_all(samples)
+#print(all_pars_null)
+#fig = plot_MLE_dist(all_pars_null)
+#fig.tight_layout()
+#fig.savefig("quickstart_MLE_dists.svg")
+
+q_null, joint_fitted_nuis, pars_nuis = joint.fit_nuisance(null, samples)
+LLR = q_null - q_fit
+print(LLR) 

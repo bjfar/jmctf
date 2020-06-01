@@ -88,6 +88,7 @@ html_theme = 'sphinx_rtd_theme'
 #
 html_theme_options = {
         'logo_only': True, # Show logo pic only, not text
+        'navigation_depth': 4,
         }
 
 # Add any paths that contain custom static files (such as style sheets) here,

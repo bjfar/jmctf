@@ -9,20 +9,17 @@ Welcome to JMC-TF!
 Python tools for perfoming Monte-Carlo studies of joint distribution
 functions consisting of many components, powered by TensorFlow.
 
-.. image:: /../../tests/docs_examples/mixture_MLLR.svg
+..
+   .. image:: /../../tests/docs_examples/mixture_MLLR.svg
 
 .. toctree::
-   :maxdepth: 2
    :caption: Contents:
 
    usage/installation
    usage/quickstart
+   usage/Basics/basics
    examples/quickstart
-   examples/JointModel
-   examples/MixtureModel
-   examples/ParameterModel
-   examples/fitting
-   JMCtools
+   JMCTF 
 
 .. _ROOT: https://root.cern.ch/
 
