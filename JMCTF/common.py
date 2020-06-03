@@ -6,6 +6,18 @@ import numpy as np
 import tensorflow as tf
 import scipy.interpolate as spi
 
+# Reference dtype for consistency in TensorFlow operations
+TFdtype = np.float32
+
+# Smallest positive 32-bit float
+nearlyzero32 = np.nextafter(0,1,dtype=TFdtype)
+
+# A constant "close" to nearlyzero32, but large enough to avoid divide-by-zero
+# nans, and similar floating point problems, in all parts of JMCTF
+# (but still small enough to avoid observable errors in results)
+# TODO: Make sure this is sufficiently robust
+reallysmall = 1e10*nearlyzero32
+
 # Stuff to help format YAML output
 class blockseqtrue( list ): pass
 def blockseqtrue_rep(dumper, data):
@@ -47,7 +59,7 @@ def eCDF(x):
     """Get empirical CDFs of arrays of samples. Assumes first dimension
        is the sample dimension. All CDFs are the same since number of
        samples has to be the same"""
-    cdf = tf.constant(np.arange(1, x.shape[0]+1)/float(x.shape[0]),dtype=float)
+    cdf = tf.constant(np.arange(1, x.shape[0]+1)/float(x.shape[0]),dtype=TFdtype)
     #print("cdf.shape:", cdf.shape)
     #print("x.shape:", x.shape)
     return cdf

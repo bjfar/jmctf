@@ -17,6 +17,7 @@ import tensorflow as tf
 import copy
 from tensorflow_probability import distributions as tfd
 from .base_analysis import BaseAnalysis
+from . import common as c
 
 # Want to convert all this to YAML. Write a simple container to help with this.
 class BinnedAnalysis(BaseAnalysis):
@@ -100,7 +101,7 @@ class BinnedAnalysis(BaseAnalysis):
 
         # Determine which SRs participate in the covariance matrix
         if self.cov is not None:
-            cov = tf.constant(self.cov,dtype=float)
+            cov = tf.constant(self.cov,dtype=c.TFdtype)
             cov_diag = tf.constant([self.cov[k][k] for k in range(len(self.cov))])
             # Select which systematic to use, depending on whether SR participates in the covariance matrix
             bsys_tmp = [np.sqrt(self.cov_diag[cov_order.index(sr)]) if self.in_cov[i] else self.SR_b_sys[i] for i,sr in enumerate(self.SR_names)]
@@ -109,8 +110,8 @@ class BinnedAnalysis(BaseAnalysis):
 
         # Prepare input parameters
         #print("input pars:",pars)
-        b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list
-        bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=float),0)
+        b = tf.expand_dims(tf.constant(self.SR_b,dtype=c.TFdtype),0) # Expand to match shape of signal list
+        bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=c.TFdtype),0)
         s = pars['s'] * self.s_scaling # We "scan" normalised versions of s, to help optimizer
         theta = pars['theta'] * self.theta_scaling # We "scan" normalised versions of theta, to help optimizer
         #print("de-scaled pars: s    :",s)
@@ -193,14 +194,14 @@ class BinnedAnalysis(BaseAnalysis):
         """
         Asamples = {}
         s = signal_pars['s'] * self.s_scaling
-        b = tf.expand_dims(tf.constant(self.SR_b,dtype=float),0) # Expand to match shape of signal list 
+        b = tf.expand_dims(tf.constant(self.SR_b,dtype=c.TFdtype),0) # Expand to match shape of signal list 
         #print("Asimov s:",s)
         #print("self.in_cov:", self.in_cov)
         Asamples["n"] = tf.expand_dims(b + s,0) # Expand to sample dimension size 1
         if self.cov is not None:
-            Asamples["x_cov"] = tf.constant(np.zeros((1,s.shape[0],np.sum(self.in_cov))),dtype=float)
+            Asamples["x_cov"] = tf.constant(np.zeros((1,s.shape[0],np.sum(self.in_cov))),dtype=c.TFdtype)
             if np.sum(~self.in_cov)>0:
-                Asamples["x_nocov"] = tf.constant(np.zeros((1,s.shape[0],np.sum(~self.in_cov))),dtype=float)
+                Asamples["x_nocov"] = tf.constant(np.zeros((1,s.shape[0],np.sum(~self.in_cov))),dtype=c.TFdtype)
         else:
             Asamples["x"] = tf.expand_dims(0*s,0)
         #print("{0}: Asamples: {1}".format(self.name, Asamples))
@@ -209,13 +210,13 @@ class BinnedAnalysis(BaseAnalysis):
     def get_observed_samples(self):
         """Construct dictionary of observed data for this analysis"""
         Osamples = {}
-        Osamples["n"] = tf.expand_dims(tf.expand_dims(tf.constant(self.SR_n,dtype=float),0),0)
+        Osamples["n"] = tf.expand_dims(tf.expand_dims(tf.constant(self.SR_n,dtype=c.TFdtype),0),0)
         if self.cov is not None:
-            Osamples["x_cov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(self.in_cov),dtype=float),0),0)
+            Osamples["x_cov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(self.in_cov),dtype=c.TFdtype),0),0)
             if np.sum(~self.in_cov)>0:
-                Osamples["x_nocov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(~self.in_cov),dtype=float),0),0)
+                Osamples["x_nocov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(~self.in_cov),dtype=c.TFdtype),0),0)
         else:
-            Osamples["x"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=float),0),0)
+            Osamples["x"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=c.TFdtype),0),0)
         return Osamples
 
     def get_free_parameter_structure(self):
@@ -239,17 +240,17 @@ class BinnedAnalysis(BaseAnalysis):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
         seeds = self.get_seeds_nuis(sample_dict,signal) # Get initial guesses for nuisance parameter MLEs
         stacked_seeds = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
-        thetas = {"theta": tf.Variable(stacked_seeds, dtype=float, name='theta')}
-        return thetas
+        thetas = {"theta": tf.Variable(stacked_seeds, dtype=c.TFdtype, name='theta')}
+        return thetas, signal
 
     def get_all_tensorflow_variables(self,sample_dict):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model"""
         seeds = self.get_seeds_s_and_nuis(sample_dict) # Get initial guesses for parameter MLEs
         stacked_theta = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
         stacked_s     = np.stack([seeds[sr]['s'] for sr in self.SR_names],axis=-1)
-        pars = {"s": tf.Variable(stacked_s, dtype=float, name='s'),
-                "theta": tf.Variable(stacked_theta, dtype=float, name='theta')}
-        return pars
+        pars = {"s": tf.Variable(stacked_s, dtype=c.TFdtype, name='s'),
+                "theta": tf.Variable(stacked_theta, dtype=c.TFdtype, name='theta')}
+        return pars, {}
         
     def as_dict_short_form(self):
         """Add contents to dictionary, ready for dumping to YAML file
@@ -326,8 +327,8 @@ class BinnedAnalysis(BaseAnalysis):
                 x = x_all[...,i]
        
             # From object member variables
-            b = tf.constant(self.SR_b[i],dtype=float)
-            bsys = tf.constant(self.SR_b_sys[i],dtype=float)
+            b = tf.constant(self.SR_b[i],dtype=c.TFdtype)
+            bsys = tf.constant(self.SR_b_sys[i],dtype=c.TFdtype)
 
             bcast = np.ones((x+b+n).shape) # For easier broadcasting
  
@@ -414,8 +415,8 @@ class BinnedAnalysis(BaseAnalysis):
             #print("x:", x)
 
             # From object member variables
-            b = tf.constant(self.SR_b[i],dtype=float)
-            bsys = tf.constant(self.SR_b_sys[i],dtype=float)
+            b = tf.constant(self.SR_b[i],dtype=c.TFdtype)
+            bsys = tf.constant(self.SR_b_sys[i],dtype=c.TFdtype)
 
             #print("s:", s)
             #print("b:", b)

@@ -142,9 +142,9 @@ class SigGen:
             for SR,dsetname in zip(a.SR_names,hdf5_names[name]):
                 if self.thin is not None:
                     # I think faster to read all signals and then select the thinned ones in memory
-                    datalist += [tf.constant(self.h5group[dsetname][:][self.thin_indices[j:j+size]][mvalid],dtype=float)] 
+                    datalist += [tf.constant(self.h5group[dsetname][:][self.thin_indices[j:j+size]][mvalid],dtype=c.TFdtype)] 
                 else:
-                    datalist += [tf.constant(self.h5group[dsetname][j:j+size][mvalid],dtype=float)]
+                    datalist += [tf.constant(self.h5group[dsetname][j:j+size][mvalid],dtype=c.TFdtype)]
             # Merge all predictions for this analysis under 's' parameter
             stacked = tf.stack(datalist,axis=1)
             signal_chunk[name]['s'] = stacked
@@ -154,7 +154,7 @@ class SigGen:
         #print("sigIDs:", len(sigIDs))
         return signal_chunk, sigIDs 
 
-nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses.values()}
+nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=c.TFdtype)} for a in analyses.values()}
 DOF = 4 # There were 4 parameters in the EWMSSM scan. So if asymptotic theory is in good shape then results should be distributed as chi^2 with DOF=4. But it probably won't be.
 
 # Specific signal whose local distributions and p-values we would like to know

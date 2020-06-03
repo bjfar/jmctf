@@ -14,7 +14,7 @@ bins = [("SR1", 10, 9, 2),
         ("SR2", 50, 55, 4)]
 binned = BinnedAnalysis("Test binned", bins)
 # make_joint
-joint = JointDistribution([norm,binned])
+joint = JointDistribution([binned])
 #joint = JointDistribution([binned])
 # get_structure
 print("Sample structure:",joint.get_sample_structure()) 
@@ -77,6 +77,22 @@ q_fit, joint_fitted_null, all_pars_null = joint.fit_all(samples)
 #fig.tight_layout()
 #fig.savefig("quickstart_MLE_dists.svg")
 
+print("Fitting null hypothesis")
 q_null, joint_fitted_nuis, pars_nuis = joint.fit_nuisance(null, samples)
 LLR = q_null - q_fit
-print(LLR) 
+print("LLR:",LLR)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tensorflow_probability import distributions as tfd
+fig = plt.figure(figsize=(5,3))
+ax = fig.add_subplot(111)
+ax.set_xlabel("LLR")
+ax.set(yscale="log")
+sns.distplot(LLR, color='b', kde=False, ax=ax, norm_hist=True, label="JMCTF")
+q = np.linspace(0, np.max(LLR),1000)
+chi2 = tf.math.exp(tfd.Chi2(df=4).log_prob(q)) 
+ax.plot(q,chi2,color='b',lw=2,label="chi^2 (DOF=4)")
+ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+fig.tight_layout()
+fig.savefig("quickstart_LLR.svg")

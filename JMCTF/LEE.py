@@ -769,7 +769,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             samples, logw = joint.biased_sample(N, bias)
         else:
             samples = joint.sample(N)
-            logw = tf.zeros((N,1),dtype=float)
+            logw = tf.zeros((N,1),dtype=c.TFdtype)
 
         # Save events to database
         conn = self.connect_to_db()
@@ -1171,7 +1171,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # I think here it is fine, and easier, to load them all and do the selection in RAM.
         if len(bootstrap_EventIDs)>0:
             df = self.load_results(self.local_table+self.nullname,['EventID','neg2logL'])
-            background_neg2logL = tf.constant(df.loc[bootstrap_EventIDs]['neg2logL'].to_numpy(),dtype=float) 
+            background_neg2logL = tf.constant(df.loc[bootstrap_EventIDs]['neg2logL'].to_numpy(),dtype=c.TFdtype) 
         else:
             background_neg2logL = None
 

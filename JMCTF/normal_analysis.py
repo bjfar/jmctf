@@ -13,6 +13,7 @@ import tensorflow as tf
 import copy
 from tensorflow_probability import distributions as tfd
 from .base_analysis import BaseAnalysis
+from . import common as c
 
 # Want to convert all this to YAML. Write a simple container to help with this.
 class NormalAnalysis(BaseAnalysis):
@@ -47,7 +48,7 @@ class NormalAnalysis(BaseAnalysis):
         # Need to construct these shapes to match the event_shape, batch_shape, sample_shape 
         # semantics of tensorflow_probability.
 
-        print("pars in model:",pars)
+        #print("pars in model:",pars)
         tfds = {}
         mu = pars['mu'] * self.mu_scaling
         theta = pars['theta'] * self.theta_scaling 
@@ -75,14 +76,14 @@ class NormalAnalysis(BaseAnalysis):
         scaled_pars = {}
         scaled_nuis = {}
 
-        print("pars:", pars)
+        #print("pars:", pars)
 
         if 'nuisance' in pars.keys() and pars['nuisance'] is None:
             # trigger shortcut to set nuisance parameters to zero, for sample generation. 
             theta_in = tf.constant(0*pars['mu'])
             if 'sigma_t' not in pars.keys():
                 # Default for when no extra "theory" uncertainty is provided
-                sigma_t_in = tf.constant(1e-10*pars['mu']) # TODO: Cannot use exactly zero
+                sigma_t_in = tf.constant(c.reallysmall,dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
             else:
                 sigma_t_in = pars['sigma_t'] 
         else:
@@ -110,7 +111,7 @@ class NormalAnalysis(BaseAnalysis):
         """
         Asamples = {}
         mu = signal_pars['mu'] * self.mu_scaling
-        theta = tf.expand_dims(tf.constant(0,dtype=float),0) # Expand to match shape of signal list 
+        theta = tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0) # Expand to match shape of signal list 
         Asamples["x"] = tf.expand_dims(mu,0) # Expand to sample dimension size 1
         Asamples["x_theta"] = tf.expand_dims(theta,0) # Expand to sample dimension size 1
         return Asamples
@@ -118,8 +119,8 @@ class NormalAnalysis(BaseAnalysis):
     def get_observed_samples(self):
         """Construct dictionary of observed data for this analysis"""
         Osamples = {}
-        Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=float),0),0)
-        Osamples["x_theta"] = tf.expand_dims(tf.expand_dims(tf.constant(0,dtype=float),0),0)
+        Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=c.TFdtype),0),0)
+        Osamples["x_theta"] = tf.expand_dims(tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0),0)
         return Osamples
 
     def get_free_parameter_structure(self):
@@ -149,10 +150,11 @@ class NormalAnalysis(BaseAnalysis):
         if 'sigma_t' in signal.keys():
             sigma_t = signal['sigma_t']
         else:
-            sigma_t = 1e-20 # TODO: Cannot use exactly zero 
+            sigma_t = c.reallysmall # TODO: Cannot use exactly zero 
         theta_MLE = - ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
-        thetas = {"theta": tf.Variable(theta_MLE, dtype=float, name='theta')} # Use exact "starting guess", assuming mu is fixed.
-        return thetas
+        pars = {"theta": tf.Variable(theta_MLE, dtype=c.TFdtype, name='theta')} # Use exact "starting guess", assuming mu is fixed.
+        fixed_pars = {"sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
+        return pars, fixed_pars
 
     def get_all_tensorflow_variables(self,sample_dict):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model
@@ -162,10 +164,10 @@ class NormalAnalysis(BaseAnalysis):
         """
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
-        pars = {"mu": tf.Variable(x, dtype=float, name='mu'),
-                "theta": tf.Variable(x_theta, dtype=float, name='theta'),
-                "sigma_t": tf.constant(1e-20, dtype=float, name='sigma_t')} # TODO: Cannot use exactly zero
-        return pars
+        pars = {"mu": tf.Variable(x, dtype=c.TFdtype, name='mu'),
+                "theta": tf.Variable(x_theta, dtype=c.TFdtype, name='theta')}
+        fixed_pars = {"sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
+        return pars, fixed_pars
 
 
 
