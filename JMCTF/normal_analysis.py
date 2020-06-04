@@ -78,17 +78,17 @@ class NormalAnalysis(BaseAnalysis):
 
         #print("pars:", pars)
 
-        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
-            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+        if 'theta' not in pars.keys():
+            # trigger shortcut to set nuisance parameters to zero. Useful for sample generation. 
             theta_in = tf.constant(0*pars['mu'])
-            if 'sigma_t' not in pars.keys():
-                # Default for when no extra "theory" uncertainty is provided
-                sigma_t_in = tf.constant(c.reallysmall,dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
-            else:
-                sigma_t_in = pars['sigma_t'] 
         else:
             theta_in = pars['theta']
-            sigma_t_in = pars['sigma_t']
+
+        if 'sigma_t' not in pars.keys():
+            # Default for when no extra "theory" uncertainty is provided
+            sigma_t_in = tf.constant(c.reallysmall,dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
+        else:
+            sigma_t_in = pars['sigma_t'] 
 
         scaled_pars['mu']    = pars['mu'] / self.mu_scaling
         scaled_nuis['theta'] = theta_in / self.theta_scaling
@@ -153,7 +153,8 @@ class NormalAnalysis(BaseAnalysis):
             sigma_t = c.reallysmall # TODO: Cannot use exactly zero 
         theta_MLE = - ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
         pars = {"theta": tf.Variable(theta_MLE, dtype=c.TFdtype, name='theta')} # Use exact "starting guess", assuming mu is fixed.
-        fixed_pars = {"sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
+        fixed_pars = {"mu": tf.constant(mu, dtype=c.TFdtype, name='mu'), # mu fixed in nuisance-parameter-only fits
+                      "sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
         return pars, fixed_pars
 
     def get_all_tensorflow_variables(self,sample_dict):

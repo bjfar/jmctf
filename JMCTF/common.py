@@ -5,6 +5,7 @@ import sqlite3
 import numpy as np
 import tensorflow as tf
 import scipy.interpolate as spi
+from collections.abc import Mapping
 
 # Reference dtype for consistency in TensorFlow operations
 TFdtype = np.float32
@@ -125,3 +126,20 @@ def remove_prefix(prefix,d):
     """Inverse of add_prefix"""
     return {key.split("{0}::".format(prefix))[1]: val for key,val in d.items()}
 
+def print_with_id(d,id_only=False):
+    """Print dictionary contents along with their memory addresses in hex format,
+       to help identify which contents refer to the same objects"""
+    if d is not None:
+      out = "{"
+      for k,v in d.items():
+        out += "{0}: ".format(k)
+        if isinstance(v, Mapping):
+            out+="{0}".format(print_with_id(v,id_only))
+        elif id_only:
+            out+="address={0}, ".format(id(v))
+        else:
+            out+="{0} (address={1}), ".format(v,id(v))
+      out += "}"
+    else:
+        out = "None"
+    return out

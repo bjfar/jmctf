@@ -166,8 +166,8 @@ class BinnedAnalysis(BaseAnalysis):
         scaled_pars = {}
         scaled_nuis = {}
         #print("pars:",pars)
-        if 'nuisance' in pars.keys() and pars['nuisance'] is None:
-            # trigger shortcut to set nuisance parameters to zero, for sample generation. 
+        if 'theta' not in pars.keys():
+            # If values not provided, trigger shortcut to set nuisance parameters to zero. Useful for sample generation.
             theta_in = tf.constant(0*pars['s'])
         else:
             theta_in = pars['theta']

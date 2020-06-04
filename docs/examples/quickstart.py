@@ -14,7 +14,7 @@ bins = [("SR1", 10, 9, 2),
         ("SR2", 50, 55, 4)]
 binned = BinnedAnalysis("Test binned", bins)
 # make_joint
-joint = JointDistribution([binned])
+joint = JointDistribution([norm,binned])
 #joint = JointDistribution([binned])
 # get_structure
 print("Sample structure:",joint.get_sample_structure()) 
@@ -47,7 +47,8 @@ print(to_numpy(all_pars_3))
 free, fixed, nuis = joint.get_parameter_structure()
 print("free:", free)
 
-null = {'Test normal': {'mu': [0.], 'nuisance': None}, 'Test binned': {'s': [(0., 0.)], 'nuisance': None}}
+null = {'Test normal': {'mu': [0.]}, 'Test binned': {'s': [(0., 0.)]}}
+
 joint_null = joint.fix_parameters(null)
 # or alternatively one can supply parameters to the constructor:
 # joint_null = JointDistribution([norm,binned],null)
@@ -91,8 +92,8 @@ ax.set_xlabel("LLR")
 ax.set(yscale="log")
 sns.distplot(LLR, color='b', kde=False, ax=ax, norm_hist=True, label="JMCTF")
 q = np.linspace(0, np.max(LLR),1000)
-chi2 = tf.math.exp(tfd.Chi2(df=4).log_prob(q)) 
-ax.plot(q,chi2,color='b',lw=2,label="chi^2 (DOF=4)")
+chi2 = tf.math.exp(tfd.Chi2(df=3).log_prob(q)) 
+ax.plot(q,chi2,color='b',lw=2,label="chi^2 (DOF=3)")
 ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
 fig.tight_layout()
 fig.savefig("quickstart_LLR.svg")

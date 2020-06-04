@@ -7,6 +7,9 @@ from collections.abc import Mapping
 import massminimize as mm
 from . import common as c
 
+#tmp
+#id_only = False
+
 def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     """General -2logL function to optimise"""
     if transform is not None:
@@ -20,8 +23,9 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     print("neg2logL: all_pars:", all_pars)
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
     q = -2*joint.log_prob(data)
+    print("q:", q)
     if tf.math.reduce_any(tf.math.is_nan(q)):
-        msg = "NaNs detect in result of neg2LogL calculation! Please check that your input parameters are valid for the distributions you are investigating!"
+        msg = "NaNs detect in result of neg2LogL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable!"
         raise ValueError(msg)
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
@@ -46,10 +50,10 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
               'pre_scaled_pars': pre_scaled_pars,
               'transform': transform
               }
-    print("pars:", pars)
-    print("const_pars:", const_pars)
+    print("pars:", pars) #c.print_with_id(pars,id_only))
+    print("const_pars:", const_pars) # c.print_with_id(const_pars,id_only))
 
-    exact_MLEs = False #True
+    exact_MLEs = False
     for a in analyses.values():
         if not a.exact_MLEs: exact_MLEs = False # TODO: check implementations 
     if exact_MLEs:
@@ -108,6 +112,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                 self.Asamples.update(c.add_prefix(a.name,a.get_Asimov_samples(self.pars[a.name])))
             super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
             self.dists = dists
+        else:
+            self.pars = None
         # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
@@ -117,16 +123,13 @@ class JointDistribution(tfd.JointDistributionNamed):
        out = {}
        #print("constant=",constant)
        for k,val in d.items():
-           if k is 'nuisance': # Special key we reserve for treating nuisance parameters.
-               out[k] = val
-               #print(k, 'was nuisance, left alone:', val)
-           elif tf.is_tensor(val):
-               out[k] = val # Already tensor-like, no need to convert (and in fact bad to do so since it could break graph connections)
-               #print(k, 'was tensor, left alone:', val)
+           if isinstance(val,tf.Variable):
+               out[k] = val # Already a Variable, no need to convert (and in fact bad to do so since it could break graph connections)
+               #print(k, 'was Variable, left alone:', val)
            elif isinstance(val, Mapping):
                out[k] = self.convert_to_TF(val,constant) # We must go deeper
            else:
-               # Try to create tensorflow variable from this data
+               # Try to create tensorflow variable or constant from this data
                try:
                    if constant:
                        out[k] = tf.constant(val, dtype=c.TFdtype)
@@ -167,7 +170,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         scaled_pars = {}
         #print("pars:",pars)
         for a in self.analyses.values():
-            if a.name not in pars.keys(): raise KeyError("Parameters for analysis {0} not found!".format(a.name)) 
+            if a.name not in pars.keys(): raise KeyError("Parameters for analysis {0} not found!".format(a.name))
             s_pars, s_nuis, us_nuis = a.scale_pars(pars[a.name],pre_scaled_pars)
 
             # Logic to avoid applying scaling to parameters supplied with scaling already applied
@@ -199,8 +202,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             p, fp = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),signal[a.name])
             pars[a.name] = p
             fixed_pars[a.name] = fp
-        print("pars:", pars)
-        print("fixed_pars:", fixed_pars)
+        #print("pars:", c.print_with_id(pars,id_only))
+        #print("fixed_pars:", c.print_with_id(fixed_pars,id_only))
         return pars, fixed_pars
 
     def get_samples_for(self,name,samples):
@@ -238,10 +241,10 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object)"""
         sig = self.convert_to_TF(signal,constant=True)
-        print("sig:", sig)
+        print("sig:", sig) #c.print_with_id(sig,id_only))
         nuis_pars, fixed_pars = self.get_nuis_parameters(sig,samples)
-        print("nuis_pars:", nuis_pars)
-        print("fixed_pars:", fixed_pars)
+        print("nuis_pars:", nuis_pars) #c.print_with_id(nuis_pars,id_only))
+        print("fixed_pars:", fixed_pars) #c.print_with_id(fixed_pars,id_only))
         joint_fitted, q = optimize(nuis_pars,fixed_pars,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag,verbose=verbose)
         return q, joint_fitted, nuis_pars
 
