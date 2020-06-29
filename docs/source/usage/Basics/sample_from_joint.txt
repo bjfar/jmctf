@@ -3,7 +3,7 @@
 Sample from the joint distribution
 ----------------------------------
 
-In the previous section, having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it::
+In the previous section (:ref:`combine_into_joint_long`), having fitted our joint PDF to a single sample, we obtained a second `JointDistribution` object as output, whose parameters are set to their maximum likelihood estimators given that sample. Its probability distribution is therefore now fully-specified, and we can sample from it::
 
    >>> samples = joint_fitted.sample(3)
    >>> print(to_numpy(samples))
@@ -19,7 +19,7 @@ In the previous section, having fitted our joint PDF to a single sample, we obta
 As before, we can fit our distribution to these samples, and this time we will obtain maximum likelihood estimators for each sample independently::
 
     >>> q_3, joint_fitted_3, all_pars_3 = joint.fit_all(samples)
-    >>> print(to_numpy(all_pars_3))>
+    >>> print(to_numpy(all_pars_3))
     {'Test normal': 
      {'mu': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
       'theta': array([0., 0., 0.], dtype=float32), 
@@ -36,4 +36,30 @@ Note that `sigma_t` is not considered a free parameter in the `BinnedAnalysis` c
 
 Also note that we cannot fit to all the samples simultaneously, i.e. we don't use each sample as independent information all contributing simultaneously to knowledge of the underlying parameters. JMCTF is designed for performing Monte Carlo simulations of scientific experiments that run just once (such as a search for new particles at the Large Hadron Collider), so each sample is treated as pseudodata whose main purpose is to help us understand the distributions of test statistics. In this view each sample is an independent pseudo-experiment. If an experiment is in fact to be run multiple times in reality, then the PDF of the underlying Analysis class needs to reflect this by using random variables of the appropriate dimension; or for example by using two normal random variables rather than one if the experiment runs twice. 
 
-But that is getting complicated, so back to the quick-start.
+But back to the example. What we did here was a little weird; we sampled from a distribution that was itself fit to some other samples. More usually, we would sample from a distribution with parameters fixed to some "null hypothesis" (or "alternate hypothesis") values, based on some theoretical motivation. To do this, we can either create the original JointDistribution object with fixed parameters, or fix them in an existing JointDistribution object. But to do this, we need to understand the parameter structure expected by our object. This can be introspected using the :py:meth:`get_parameter_structure <.JointDistribution.get_parameter_structure>` method:
+
+    >>> free, fixed, nuis = joint.get_parameter_structure()
+    >>> print("free:", free)
+    {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
+    >>> print("fixed:", fixed)
+
+    
+
+    >>> import numpy as np
+    >>> import tensorflow as tf
+    >>> from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
+    >>> norm = NormalAnalysis("Test normal", 5, 2) # (name, obs., std.dev.)
+    >>> bins = [("SR1", 10, 9, 2), # (name, obs., b, sigma_b)
+    ...         ("SR2", 50, 55, 4)]
+    >>> binned = BinnedAnalysis("Test binned", bins)
+    >>> joint = JointDistribution([norm,binned])
+
+Next, set some input (e.g. "null") parameters for the analyses::
+
+    >>> free, fixed, nuis = joint.get_parameter_structure()
+    >>> print("free:", free)
+    {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
+
+    >>> null = {'Test normal': {'mu': [[0.]], 'nuisance': None}, 'Test binned': {'s': [[0., 0.]], 'nuisance': None}}
+    >>> joint_null = joint.fix_parameters(null)
+

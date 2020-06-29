@@ -6,18 +6,40 @@ JMCTF package
 Module contents
 ---------------
 
-.. automodule:: JMCTF
+    * :py:mod:`NormalAnalysis <JMCTF.normal_analysis>`
+    * :py:mod:`BinnedAnalysis <JMCTF.binned_analysis>`
+
+Analysis classes
+----------------
+
+NormalAnalysis
+^^^^^^^^^^^^^^
+
+.. automodule:: JMCTF.normal_analysis
     :members:
     :undoc-members:
     :show-inheritance:
 
-Submodules
-----------
+BinnedAnalysis
+^^^^^^^^^^^^^^
 
-JMCtools.common module
+.. automodule:: JMCTF.binned_analysis
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+JointDistribution
+-----------------
+
+.. autoclass:: JMCTF.joint.JointDistribution
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+JMCTF.common module
 ----------------------
 
-.. automodule:: JMCtools.common
+.. automodule:: JMCTF.common
     :members:
     :undoc-members:
     :show-inheritance:

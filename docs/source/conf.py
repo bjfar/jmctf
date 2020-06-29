@@ -165,6 +165,10 @@ texinfo_documents = [
      'Miscellaneous'),
 ]
 
+# -- Options for automatic documentation generation --------------------------
+
+# Parse both class docstring and __init__ docstring
+autoclass_content = "both"
 
 # -- Extension configuration -------------------------------------------------
 

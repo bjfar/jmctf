@@ -20,15 +20,10 @@ First, we create some "Analysis" objects and combine them into a :py:class:`.Joi
     >>> import numpy as np
     >>> import tensorflow as tf
     >>> from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
-
-    # Instantiate Analysis objects
-    >>> norm = NormalAnalysis("Test normal", 5, 2)
-    # (name, n, b, sigma_b)
-    >>> bins = [("SR1", 10, 9, 2),
+    >>> norm = NormalAnalysis("Test normal", 5, 2) # (name, obs., std.dev.)
+    >>> bins = [("SR1", 10, 9, 2), # (name, obs., b, sigma_b)
     ...         ("SR2", 50, 55, 4)]
     >>> binned = BinnedAnalysis("Test binned", bins)
-
-    # Combine into a JointDistribution object
     >>> joint = JointDistribution([norm,binned])
 
 Next, set some input (e.g. "null") parameters for the analyses::

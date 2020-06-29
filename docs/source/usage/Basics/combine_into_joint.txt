@@ -10,24 +10,23 @@ JMCTF is designed for jointly analysing many independent experiments simultaneou
    >>> from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
    >>> norm = NormalAnalysis("Test normal", 5, 2)
 
-where the arguments are simply a name for the experiment, followed by the mean and standard deviation of the normal random variable. 
+where the arguments are simply a name for the experiment, followed by an "observed" value, and the standard deviation of the normal random variable. The mean is treated as a free parameter so it is not specified. The "observed" value will only be used for final p-value computations, after all simulations are done, so it does not affect the simulations themselves.
 
 Next, an experiment consisting of several independent Poisson random variables, whose means are characterised in terms of a "signal" parameter (either fixed, or to be fitted) and a second "background" parameter constrained by a normally distributed control measurement::
 
-   >>> # (name, n, b, sigma_b)
    >>> bins = [("SR1", 10, 9, 2),
    ...         ("SR2", 50, 55, 4)]
    >>> binned = BinnedAnalysis("Test binned", bins)
 
-where a full description of the required bin definition data is given in the :py:class`.BinnedAnalysis` class documentation. 
+where the bin data consists of a name, an "observed" value, an expected background parameter, and an uncertainty parameter for the background. A full description is given in the :py:class:`.BinnedAnalysis` class documentation.
 
 Not much can be done with these Analysis objects on their own; they act mainly as "blueprints" for experiments, to be used by other classes. The simplest such class is :py:class:`.JointDistribution`, which can do such things as jointly fit the parameters of many Analysis classes, and sample from the underlying distribution functions [#jointdist]_.
 
-Creating a joint PDF object with :py:class:`.JointDistribution` is as simple as providing a list of component Analysis object to the constructor::
+Creating a joint PDF object with :py:class:`.JointDistribution` is as simple as providing a list of component Analysis objects to the constructor::
 
    >>> joint = JointDistribution([norm,binned])
 
-Fitting the joint PDF to some data requires that the data be provided in an appropriately structured dictionary, so that samples can be assigned to the correct Analysis. The correct structure to use can be revealed by the :py:class`.JointDistribution.get_sample_structure` function::
+Fitting the joint PDF to some data requires that the data be provided in an appropriately structured dictionary, so that samples can be assigned to the correct Analysis. The correct structure to use can be revealed by the :py:meth:`get_sample_structure <.JointDistribution.get_sample_structure>` method::
 
     >>> joint.get_sample_structure()
     {'Test normal::x': 1, 'Test normal::x_theta': 1, 'Test binned::n': 2, 'Test binned::x': 2}
@@ -51,14 +50,9 @@ Knowing this information, we can manually construct a sample for the full joint 
      {'s': <tf.Variable 's:0' shape=(2,) dtype=float32, numpy=array([ 0.        , -0.23735635], dtype=float32)>, 
       'theta': <tf.Variable 'theta:0' shape=(2,) dtype=float32, numpy=array([0., 0.], dtype=float32)>}}
 
-The output is not so pretty because the parameters are TensorFlow objects. We can convert them to numpy for better viewing::
+The output is not so pretty because the parameters are TensorFlow objects. We can convert them to numpy with the :py:func:`common.to_numpy` function for better viewing::
 
-    >>> def to_numpy(d):
-    ...    out = {}
-    ...    for k,v in d.items():
-    ...        if isinstance(v, dict): out[k] = to_numpy(v)
-    ...        else: out[k] = v.numpy()
-    ...    return out
+    >>> from JMCTF.common import to_numpy
     >>> print(to_numpy(all_pars))
     {'Test normal': 
       {'mu': 4.3, 'theta': 0.0, 'sigma_t': 0.0}, 
@@ -66,7 +60,7 @@ The output is not so pretty because the parameters are TensorFlow objects. We ca
       {'s': array([ 0.        , -0.23735635], dtype=float32), 
        'theta': array([0., 0.], dtype=float32)}}
 
-The :py:class`.JointDistribution.fit_all` function fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. 
+The :py:meth:`fit_all <.JointDistribution.fit_all>` method fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. 
 
 Here we have only fit the PDF to one sample, however the power of JMCTF really lies in fitting the PDF to lots of samples quickly. Of course manually creating lots of samples is tedious and not very useful; a more standard workflow is to actually *sample* the samples from the PDF under some fixed "null hypothesis" parameter values. We cover this in :ref:`sample_from_joint_long`.
 

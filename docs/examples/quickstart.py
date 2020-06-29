@@ -46,6 +46,8 @@ print(to_numpy(all_pars_3))
 # Learn parameters that we are required to supply
 free, fixed, nuis = joint.get_parameter_structure()
 print("free:", free)
+print("fixed:", fixed)
+print("nuis", nuis)
 
 null = {'Test normal': {'mu': [0.]}, 'Test binned': {'s': [(0., 0.)]}}
 

@@ -20,12 +20,34 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
         all_pars = pars_t
     else:
         all_pars = c.deep_merge(const_pars,pars_t)
-    print("neg2logL: all_pars:", all_pars)
+
+    # Sanity check: make sure parameters haven't become nan somehow
+    anynan = False
+    nanpar = ""
+    for a,par_dict in pars.items():
+        for p, val in par_dict.items():
+            if tf.math.reduce_any(tf.math.is_nan(val)):
+                anynan = True
+                nanpar += "\n    {0}::{1}".format(a,p)
+            # Temporary monitoring hack
+            if p=='theta' and a=='Test normal':
+                print(a, p, val)
+    if anynan:
+        msg = "NaNs detected in parameter arrays during optimization! The fit may have become unstable and wandering into an invalid region of parameter space; please check your analysis setup. Parameter arrays containing NaNs were:{0}".format(nanpar)
+        raise ValueError(msg)
+
+    #print("neg2logL: all_pars:", all_pars)
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
     q = -2*joint.log_prob(data)
-    print("q:", q)
+    #print("q:", q)
     if tf.math.reduce_any(tf.math.is_nan(q)):
-        msg = "NaNs detect in result of neg2LogL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable!"
+        # Attempt to locate components generating the nans
+        component_logprobs = joint.log_prob_parts(data)
+        nan_components = ""
+        for comp,val in component_logprobs.items():
+            if tf.math.reduce_any(tf.math.is_nan(val)):
+                nan_components += "\n    {0}".format(comp)                
+        msg = "NaNs detect in result of neg2LogL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable! Components of the joint distribution whose log_prob contained nans were:" + nan_components
         raise ValueError(msg)
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
@@ -50,8 +72,21 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
               'pre_scaled_pars': pre_scaled_pars,
               'transform': transform
               }
-    print("pars:", pars) #c.print_with_id(pars,id_only))
-    print("const_pars:", const_pars) # c.print_with_id(const_pars,id_only))
+    #print("pars:", pars) #c.print_with_id(pars,id_only))
+    #print("const_pars:", const_pars) # c.print_with_id(const_pars,id_only))
+
+    # Sanity check input parameters
+    anynan = False
+    nanpar = ""
+    for pars_tf in [pars, const_pars]:
+        for a,par_dict in pars_tf.items():
+            for p, val in par_dict.items():
+                if tf.math.reduce_any(tf.math.is_nan(val)):
+                    anynan = True
+                    nanpar += "\n    {0}::{1}".format(a,p)
+    if anynan:
+        msg = "NaNs detected in input parameter arrays for 'optimize' function! Parameter arrays containing NaNs were:{0}".format(nanpar)
+        raise ValueError(msg)
 
     exact_MLEs = False
     for a in analyses.values():
@@ -80,29 +115,44 @@ class JointDistribution(tfd.JointDistributionNamed):
     """Object to combine analyses together and treat them as a single
        joint distribution. Uses JointDistributionNamed for most of the
        underlying work.
-       
-       analyses - list of analysis-like objects to be combined
-       signal - dictionary of dictionaries containing signal parameter
-        or constant tensors for each analysis.
-       model_type - Specify treame
-       pre_scaled_pars - If true, all input parameters are already scaled such that MLEs
-                         have variance of approx. 1 (for more stable fitting).
-                         If false, parameters are conventionally (i.e. not) scaled, and
-                         required scaling internally.
-                       - 'all', 'nuis', None
 
        TODO: This object has a bunch of stuff that only works with BinnedAnalysis
              objects as the 'analyses'. Needs to be generalised. 
     """
    
     def __init__(self, analyses, pars=None, pre_scaled_pars=None):
+        """ 
+        :param analyses: list of analysis-like objects to be combined
+        :type analyses: list
+        :param pars: dictionary of parameters for all analysis objects, to fix
+                parameters for sampling (default: None)
+        :type pars: dictionary, optional
+        :param pre_scaled_pars: If 'all', all input parameters are already scaled 
+                such that MLEs have variance of approx. 1 (for more stable fitting).
+                If 'nuis', only nuisance parameters have been scaled.
+                If None, all parameters are conventionally (i.e. not) scaled, and
+                require scaling internally.
+        :type pre_scaled_pars: string or None, optional
+        """
+        
         self.analyses = {a.name: a for a in analyses}
         self.Osamples = {}
         for a in self.analyses.values():
            self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
             # Convert parameters to the correct sort of TensorFlow object
-            pars_tf = self.convert_to_TF(pars) 
+            pars_tf = self.convert_to_TF(pars)
+            # Check that parameters are not NaN
+            anynan = False
+            nanpar = ""
+            for a,par_dict in pars_tf.items():
+                for p, val in par_dict.items():
+                    if tf.math.reduce_any(tf.math.is_nan(val)):
+                        anynan = True
+                        nanpar += "\n    {0}::{1}".format(a,p)
+            if anynan:
+                msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
+                raise ValueError(msg)
             self.pars = self.scale_pars(pars_tf,pre_scaled_pars)
             dists = {} 
             self.Asamples = {}
@@ -147,13 +197,16 @@ class JointDistribution(tfd.JointDistributionNamed):
        return JointDistribution(self.analyses.values(), pars)
 
     def biased_sample(self, N, bias=1):
-       """Sample from biased versions of all analyses and return them along their with sampling probability.
-          For use in importance sampling.
-          'bias' parameter indicates how many 'sigma' of upward bias to apply to the sample generation, computed
-          in terms of sqrt(variance) of the background.
-          Bias only applied to 'signal' parameters, not nuisance parameters.
-          NOTE: This doesn't really work super well. Importance sampling is a bit tricky, might need smarter
-                way of choosing the 'importance' distribution.
+       """Sample from biased versions of all analyses and return them along their with sampling probability. For use in importance sampling.
+        
+       :param N: Number of samples to draw
+       :type N: int
+       :param bias: indicates how many 'sigma' of upward bias to apply to the sample 
+               generation, computed, in terms of sqrt(variance) of the background.
+               Bias only applied to 'signal' parameters, not nuisance parameters.
+               NOTE: This doesn't really work properly. Importance sampling is a bit tricky, 
+               probably need a smarter way of choosing the 'importance' distribution. (default value=1)
+       :type bias: float, optional
        """
        biased_analyses = copy.deepcopy(self.analyses)
        for a in biased_analyses.values():
@@ -216,10 +269,21 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
         fixed_pars = {}
+        anynan = False
+        nanpar = ""
         for a in self.analyses.values():
             p, fp = a.get_all_tensorflow_variables(self.get_samples_for(a.name,samples))
+            # Check the starting guesses are valid
+            for pardicts_in in [p,fp]: 
+                for par, val in pardicts_in.items():
+                    if tf.math.reduce_any(tf.math.is_nan(val)):
+                        anynan = True
+                        nanpar += "\n    {0}::{1}".format(a,par)
             pars[a.name] = p
             fixed_pars[a.name] = fp
+        if anynan:
+            msg = "NaNs detected in parameter starting guesses! The samples used to inform the starting guesses may be invalid (e.g. negative counts for Poisson variables). Parameter starting guess arrays containing NaNs were:{0}".format(nanpar)
+            raise ValueError(msg)
         return pars, fixed_pars
 
     def get_sample_structure(self):

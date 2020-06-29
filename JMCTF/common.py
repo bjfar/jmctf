@@ -29,6 +29,15 @@ yaml.add_representer(blockseqtrue, blockseqtrue_rep)
 # (see https://stackoverflow.com/a/55799782/1447953)
 compressor = 'zlib'  # zlib, bz2
 
+def to_numpy(d):
+    """Convert bottom level items in nested dictionary
+       of TensorFlow tensors into numpy arrays"""
+    out = {}
+    for k,v in d.items():
+        if isinstance(v, dict): out[k] = to_numpy(v)
+        else: out[k] = v.numpy()
+        return out
+
 def adapt_array(arr):
     """
     http://stackoverflow.com/a/31312102/190597 (SoulNibbler)
@@ -87,19 +96,23 @@ def gather_by_idx(x,indices):
     return y
 
 def deep_merge(a, b):
-    """
-    From https://stackoverflow.com/a/56177639/1447953
-    Merge two values, with `b` taking precedence over `a`.
+    """From https://stackoverflow.com/a/56177639/1447953
 
+    Merge two values, with `b` taking precedence over `a`.
+     
     Semantics:
-    - If either `a` or `b` is not a dictionary, `a` will be returned only if
-      `b` is `None`. Otherwise `b` will be returned.
-    - If both values are dictionaries, they are merged as follows:
+
+     * If either `a` or `b` is not a dictionary, `a` will be returned only if
+       `b` is `None`. Otherwise `b` will be returned.
+
+     * If both values are dictionaries, they are merged as follows:
+     
         * Each key that is found only in `a` or only in `b` will be included in
           the output collection with its value intact.
         * For any key in common between `a` and `b`, the corresponding values
           will be merged with the same semantics.
     """
+
     if not isinstance(a, dict) or not isinstance(b, dict):
         return a if b is None else b
     else:

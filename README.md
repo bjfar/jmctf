@@ -5,4 +5,6 @@ Tools for performing simulations of test statistics for large joint probability 
 
 To build the docs:
 
+    cd docs
+    make html
  
