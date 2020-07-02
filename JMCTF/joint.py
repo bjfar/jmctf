@@ -12,6 +12,10 @@ from . import common as c
 
 def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     """General -2logL function to optimise"""
+    print("In neg2LogL:")
+    print("pars:", pars)
+    print("const_pars:", const_pars)
+    print("prescaled_pars:", pre_scaled_pars)
     if transform is not None:
         pars_t = transform(pars)
     else:
@@ -29,17 +33,16 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
             if tf.math.reduce_any(tf.math.is_nan(val)):
                 anynan = True
                 nanpar += "\n    {0}::{1}".format(a,p)
-            # Temporary monitoring hack
-            if p=='theta' and a=='Test normal':
-                print(a, p, val)
     if anynan:
         msg = "NaNs detected in parameter arrays during optimization! The fit may have become unstable and wandering into an invalid region of parameter space; please check your analysis setup. Parameter arrays containing NaNs were:{0}".format(nanpar)
         raise ValueError(msg)
 
-    #print("neg2logL: all_pars:", all_pars)
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
     q = -2*joint.log_prob(data)
-    #print("q:", q)
+    print("q:", q)
+    print("all_pars:", all_pars)
+    print("q parts:", joint.log_prob_parts(data))
+
     if tf.math.reduce_any(tf.math.is_nan(q)):
         # Attempt to locate components generating the nans
         component_logprobs = joint.log_prob_parts(data)
@@ -88,7 +91,7 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
         msg = "NaNs detected in input parameter arrays for 'optimize' function! Parameter arrays containing NaNs were:{0}".format(nanpar)
         raise ValueError(msg)
 
-    exact_MLEs = False
+    exact_MLEs = True
     for a in analyses.values():
         if not a.exact_MLEs: exact_MLEs = False # TODO: check implementations 
     if exact_MLEs:
@@ -167,6 +170,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
+        print("self.pars = ", self.pars)
 
     def convert_to_TF(self, d, constant=False):
        """Convert bottom-level entries of dictionary to TensorFlow objects, so long as they are numeric data"""
@@ -247,17 +251,17 @@ class JointDistribution(tfd.JointDistributionNamed):
             descaled_pars[a.name] = a.descale_pars(pars[a.name])
         return descaled_pars
 
-    def get_nuis_parameters(self,signal,samples):
+    def get_nuis_parameters(self,samples,fixed_pars):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
-        fixed_pars = {}
+        all_fixed_pars = {}
         for a in self.analyses.values():
-            p, fp = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),signal[a.name])
+            p, fp = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),fixed_pars[a.name])
             pars[a.name] = p
-            fixed_pars[a.name] = fp
+            all_fixed_pars[a.name] = fp
         #print("pars:", c.print_with_id(pars,id_only))
         #print("fixed_pars:", c.print_with_id(fixed_pars,id_only))
-        return pars, fixed_pars
+        return pars, all_fixed_pars
 
     def get_samples_for(self,name,samples):
         """Extract the samples for a specific analysis from a sample dictionary, and
@@ -265,22 +269,24 @@ class JointDistribution(tfd.JointDistributionNamed):
         d = {key:val for key,val in samples.items() if key.startswith("{0}::".format(name))}
         return c.remove_prefix(name,d)
 
-    def get_all_parameters(self,samples):
+    def get_all_parameters(self,samples,fixed_pars={}):
         """Samples vector and signal provided to compute good starting guesses for parameters"""
         pars = {}
-        fixed_pars = {}
+        all_fixed_pars = {}
         anynan = False
         nanpar = ""
+        # TODO: Add error checking for analysis names in fixed_pars dict? But could be useful to allow
+        # "extra" analyses to be in there. Perhaps make check optional via a flag (default on)?
         for a in self.analyses.values():
-            p, fp = a.get_all_tensorflow_variables(self.get_samples_for(a.name,samples))
+            p, fp = a.get_all_tensorflow_variables(self.get_samples_for(a.name,samples), fixed_pars.get(a.name,{}))
             # Check the starting guesses are valid
             for pardicts_in in [p,fp]: 
                 for par, val in pardicts_in.items():
                     if tf.math.reduce_any(tf.math.is_nan(val)):
                         anynan = True
-                        nanpar += "\n    {0}::{1}".format(a,par)
+                        nanpar += "\n    {0}::{1}".format(a.name,par)
             pars[a.name] = p
-            fixed_pars[a.name] = fp
+            all_fixed_pars[a.name] = fp
         if anynan:
             msg = "NaNs detected in parameter starting guesses! The samples used to inform the starting guesses may be invalid (e.g. negative counts for Poisson variables). Parameter starting guess arrays containing NaNs were:{0}".format(nanpar)
             raise ValueError(msg)
@@ -301,39 +307,40 @@ class JointDistribution(tfd.JointDistributionNamed):
         nuis  = {a.name: a.get_nuisance_parameter_structure() for a in self.analyses.values()} 
         return free, fixed, nuis
 
-    def fit_nuisance(self,signal,samples,log_tag='',verbose=False):
+    def fit_nuisance(self,samples,fixed_pars,log_tag='',verbose=False):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object)"""
-        sig = self.convert_to_TF(signal,constant=True)
-        print("sig:", sig) #c.print_with_id(sig,id_only))
-        nuis_pars, fixed_pars = self.get_nuis_parameters(sig,samples)
-        print("nuis_pars:", nuis_pars) #c.print_with_id(nuis_pars,id_only))
-        print("fixed_pars:", fixed_pars) #c.print_with_id(fixed_pars,id_only))
-        joint_fitted, q = optimize(nuis_pars,fixed_pars,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag,verbose=verbose)
-        return q, joint_fitted, nuis_pars
+        fp = self.convert_to_TF(fixed_pars,constant=True)
+        print("fp:", fp) #c.print_with_id(sig,id_only))
+        all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
+        print("all_nuis_pars:", all_nuis_pars) #c.print_with_id(nuis_pars,id_only))
+        print("all_fixed_pars:", all_fixed_pars) #c.print_with_id(fixed_pars,id_only))
+        joint_fitted, q = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag,verbose=verbose)
+        return q, joint_fitted, all_nuis_pars
 
-    def fit_nuisance_and_scale(self,signal,samples,log_tag='',verbose=False):
-        """Fit nuisance parameters plus a signal scaling parameter
-           (ignores parameters that were used to construct this object)"""
-        pars = self.get_nuis_parameters(signal,samples)
-        # Signal scaling parameter. One per sample, and per signal input
-        Nsamples = list(samples.values())[0].shape[0]
-        Nsignals = list(list(signal.values())[0].values())[0].shape[0] 
-        muV = tf.Variable(np.zeros((Nsamples,Nsignals,1)),dtype=c.TFdtype)
-        # Function to produce signal parameters from mu
-        def mu_to_sig(pars):
-            mu = tf.sinh(pars['mu']) # sinh^-1 is kind of like log, but stretches similarly for negative values. Seems to be pretty good for this.
-            sig_out = {}
-            for ka,a in signal.items():
-                sig_out[ka] = {}
-                for kp,p in a.items():
-                    sig_out[ka][kp] = mu*p
-            nuis_pars = {k:v for k,v in pars.items() if k is not 'mu'}
-            out = c.deep_merge(nuis_pars,sig_out) # Return all signal and nuisance parameters, but not mu.
-            return out 
-        pars['mu'] = muV # TODO: Not attached to any analysis, but might work anyway  
-        joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
-        return q, joint_fitted, pars
+    # TODO: Deprecated, but may need something like this again.
+    #def fit_nuisance_and_scale(self,signal,samples,log_tag='',verbose=False):
+    #    """Fit nuisance parameters plus a signal scaling parameter
+    #       (ignores parameters that were used to construct this object)"""
+    #    pars = self.get_nuis_parameters(signal,samples)
+    #    # Signal scaling parameter. One per sample, and per signal input
+    #    Nsamples = list(samples.values())[0].shape[0]
+    #    Nsignals = list(list(signal.values())[0].values())[0].shape[0] 
+    #    muV = tf.Variable(np.zeros((Nsamples,Nsignals,1)),dtype=c.TFdtype)
+    #    # Function to produce signal parameters from mu
+    #    def mu_to_sig(pars):
+    #        mu = tf.sinh(pars['mu']) # sinh^-1 is kind of like log, but stretches similarly for negative values. Seems to be pretty good for this.
+    #        sig_out = {}
+    #        for ka,a in signal.items():
+    #            sig_out[ka] = {}
+    #            for kp,p in a.items():
+    #                sig_out[ka][kp] = mu*p
+    #        nuis_pars = {k:v for k,v in pars.items() if k is not 'mu'}
+    #        out = c.deep_merge(nuis_pars,sig_out) # Return all signal and nuisance parameters, but not mu.
+    #        return out 
+    #    pars['mu'] = muV # TODO: Not attached to any analysis, but might work anyway  
+    #    joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
+    #    return q, joint_fitted, pars
   
     def fit_all(self,samples,fixed_pars={},log_tag='',verbose=False):
         """Fit all signal and nuisance parameters to samples
@@ -347,15 +354,10 @@ class JointDistribution(tfd.JointDistributionNamed):
         """
         # Make sure the samples are TensorFlow objects of the right type:
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
-        all_pars, fixed_pars = self.get_all_parameters(samples)
-        # Deal with extra fixed parameters
-        for analysis,pardict in fixed_pars.items():
-            for par,val in pardict.items():
-                if par not in fixed_pars[analysis].keys(): 
-                    raise ValueError("Fixed parameter {0} for analysis {1} was not found among the parameters for that analysis! Please check that you have used the correct parameter name.".format(par,analysis)) 
-                fixed_pars[analysis][par] = tf.constant(val, dtype=c.TFdtype, name=par)
-        joint_fitted, q = optimize(all_pars,fixed_pars,self.analyses,samples,pre_scaled_pars='all',log_tag=log_tag,verbose=verbose)
-        return q, joint_fitted, all_pars
+        fp = self.convert_to_TF(fixed_pars,constant=True)
+        all_free_pars, all_fixed_pars = self.get_all_parameters(samples,fp)
+        joint_fitted, q = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,pre_scaled_pars='all',log_tag=log_tag,verbose=verbose)
+        return q, joint_fitted, all_free_pars
 
     def cat_pars(self,pars):
         """Stack tensorflow parameters in known order"""

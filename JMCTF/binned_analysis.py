@@ -165,6 +165,7 @@ class BinnedAnalysis(BaseAnalysis):
         """
         scaled_pars = {}
         scaled_nuis = {}
+        unscaled_nuis = {}
         #print("pars:",pars)
         if 'theta' not in pars.keys():
             # If values not provided, trigger shortcut to set nuisance parameters to zero. Useful for sample generation.
@@ -173,7 +174,8 @@ class BinnedAnalysis(BaseAnalysis):
             theta_in = pars['theta']
         scaled_pars['s']     = pars['s'] / self.s_scaling
         scaled_nuis['theta'] = theta_in / self.theta_scaling
-        return scaled_pars, scaled_nuis, {'theta': theta_in} 
+        unscaled_nuis['theta'] = theta_in
+        return scaled_pars, scaled_nuis, unscaled_nuis 
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -236,14 +238,15 @@ class BinnedAnalysis(BaseAnalysis):
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
         return {"theta": len(self.SR_b)} # Just one nuisance parameter per signal region, packaged into one tensor. 
 
-    def get_nuisance_tensorflow_variables(self,sample_dict,signal):
+    def get_nuisance_tensorflow_variables(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
-        seeds = self.get_seeds_nuis(sample_dict,signal) # Get initial guesses for nuisance parameter MLEs
+        seeds = self.get_seeds_nuis(sample_dict,fixed_pars) # Get initial guesses for nuisance parameter MLEs
         stacked_seeds = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
         thetas = {"theta": tf.Variable(stacked_seeds, dtype=c.TFdtype, name='theta')}
-        return thetas, signal
+        fixed_pars_out = {"s": tf.constant(fixed_pars["s"], dtype=c.TFdtype, name='s')}
+        return thetas, fixed_pars
 
-    def get_all_tensorflow_variables(self,sample_dict):
+    def get_all_tensorflow_variables(self,sample_dict,fixed_pars):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model"""
         seeds = self.get_seeds_s_and_nuis(sample_dict) # Get initial guesses for parameter MLEs
         stacked_theta = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)

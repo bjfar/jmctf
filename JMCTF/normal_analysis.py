@@ -48,7 +48,7 @@ class NormalAnalysis(BaseAnalysis):
         # Need to construct these shapes to match the event_shape, batch_shape, sample_shape 
         # semantics of tensorflow_probability.
 
-        #print("pars in model:",pars)
+        print("pars in model:",pars)
         tfds = {}
         mu = pars['mu'] * self.mu_scaling
         theta = pars['theta'] * self.theta_scaling 
@@ -75,6 +75,7 @@ class NormalAnalysis(BaseAnalysis):
         """
         scaled_pars = {}
         scaled_nuis = {}
+        unscaled_nuis = {}
 
         #print("pars:", pars)
 
@@ -91,9 +92,10 @@ class NormalAnalysis(BaseAnalysis):
             sigma_t_in = pars['sigma_t'] 
 
         scaled_pars['mu']    = pars['mu'] / self.mu_scaling
-        scaled_nuis['theta'] = theta_in / self.theta_scaling
         scaled_pars['sigma_t'] = sigma_t_in # Always treated as fixed, so no scaling ever needed
-        return scaled_pars, scaled_nuis, {'theta': theta_in}
+        scaled_nuis['theta'] = theta_in / self.theta_scaling
+        unscaled_nuis['theta'] = theta_in
+        return scaled_pars, scaled_nuis, unscaled_nuis
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -140,35 +142,44 @@ class NormalAnalysis(BaseAnalysis):
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
         return {"theta": 1} # theta is a scalar
 
-    def get_nuisance_tensorflow_variables(self,sample_dict,signal):
+    def get_nuisance_tensorflow_variables(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model
-           (initial guesses assume fixed signal parameters)
+           (initial guesses assume fixed "signal" parameters)
         """
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
-        mu = signal['mu'] # non-scaled!
-        if 'sigma_t' in signal.keys():
-            sigma_t = signal['sigma_t']
+        mu = fixed_pars['mu'] # non-scaled!
+        if 'sigma_t' in fixed_pars.keys():
+            sigma_t = fixed_pars['sigma_t']
         else:
             sigma_t = c.reallysmall # TODO: Cannot use exactly zero 
-        theta_MLE = - ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
+        theta_MLE = ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
         pars = {"theta": tf.Variable(theta_MLE, dtype=c.TFdtype, name='theta')} # Use exact "starting guess", assuming mu is fixed.
-        fixed_pars = {"mu": tf.constant(mu, dtype=c.TFdtype, name='mu'), # mu fixed in nuisance-parameter-only fits
-                      "sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
-        return pars, fixed_pars
+        all_fixed_pars = {"mu": tf.constant(mu, dtype=c.TFdtype, name='mu'), # mu fixed in nuisance-parameter-only fits
+                          "sigma_t": tf.constant(sigma_t, dtype=c.TFdtype, name='sigma_t')}
+        print("tf pars:", pars)
+        print("tf all_fixed_pars:", all_fixed_pars)
+        return pars, all_fixed_pars
 
-    def get_all_tensorflow_variables(self,sample_dict):
+    def get_all_tensorflow_variables(self,sample_dict,fixed_pars):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model
            (initial guesses assume free 'mu' and 'theta')
            Note that "sigma_t" is an extra theory or control measurement uncertainty
            parameter that cannot be fit, and is always treated as fixed.
         """
+        print("fixed_pars:", fixed_pars)
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
-        pars = {"mu": tf.Variable(x, dtype=c.TFdtype, name='mu'),
+        pars = {"mu": tf.Variable(x - x_theta, dtype=c.TFdtype, name='mu'),
                 "theta": tf.Variable(x_theta, dtype=c.TFdtype, name='theta')}
-        fixed_pars = {"sigma_t": tf.constant(c.reallysmall, dtype=c.TFdtype, name='sigma_t')} # TODO: Cannot use exactly zero
-        return pars, fixed_pars
+        if 'sigma_t' in fixed_pars.keys():
+            sigma_t = fixed_pars['sigma_t']
+        else:
+            sigma_t = c.reallysmall # Default TODO: Cannot use exactly zero 
+        fixed_pars_out = {"sigma_t": tf.constant(sigma_t, dtype=c.TFdtype, name='sigma_t')}
+        print("tf pars:", pars)
+        print("tf fixed_pars_out:", fixed_pars_out)
+        return pars, fixed_pars_out
 
 
 
