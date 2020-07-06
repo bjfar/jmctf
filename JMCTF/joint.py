@@ -8,13 +8,13 @@ import massminimize as mm
 from . import common as c
 
 #tmp
-#id_only = False
+id_only = True
 
 def neg2LogL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise"""
     print("In neg2LogL:")
-    print("pars:", pars)
-    print("const_pars:", const_pars)
+    print("pars:", c.print_with_id(pars,id_only))
+    print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
         pars_t = transform(pars)
     else:
@@ -42,8 +42,8 @@ def neg2LogL(pars,const_pars,analyses,data,transform=None):
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
     q = -2*joint.log_prob(data)
     print("q:", q)
-    print("all_pars:", all_pars)
-    print("logL parts:", joint.log_prob_parts(data))
+    #print("all_pars:", all_pars)
+    #print("logL parts:", joint.log_prob_parts(data))
 
     if tf.math.reduce_any(tf.math.is_nan(q)):
         # Attempt to locate components generating the nans
@@ -76,8 +76,9 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
               'data': data,
               'transform': transform
               }
-    #print("pars:", pars) #c.print_with_id(pars,id_only))
-    #print("const_pars:", const_pars) # c.print_with_id(const_pars,id_only))
+    print("In 'optimize'")
+    print("pars:", c.print_with_id(pars,id_only))
+    print("const_pars:", c.print_with_id(const_pars,id_only))
 
     # Sanity check input parameters
     anynan = False
@@ -92,7 +93,7 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         msg = "NaNs detected in input parameter arrays for 'optimize' function! Parameter arrays containing NaNs were:{0}".format(nanpar)
         raise ValueError(msg)
 
-    exact_MLEs = True
+    exact_MLEs = False
     for a in analyses.values():
         if not a.exact_MLEs: exact_MLEs = False # TODO: check implementations 
     if exact_MLEs:
@@ -102,6 +103,8 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         if verbose: print("Beginning optimisation")
         #f = tf.function(mm.tools.func_partial(neg2LogL,**kwargs))
         f = mm.tools.func_partial(neg2LogL,**kwargs)
+        print("About to enter optimizer")
+        print("pars:", c.print_with_id(pars,False))
         q, none, none = mm.optimize(pars, f, **opts)
     # Rebuild distribution object with fitted parameters
     if transform is not None:
@@ -137,14 +140,17 @@ class JointDistribution(tfd.JointDistributionNamed):
                 require scaling internally.
         :type pre_scaled_pars: bool, optional
         """
-        
+        print("In JointDistribution constructor (pre_scaled_pars={0})".format(pre_scaled_pars))
+         
         self.analyses = {a.name: a for a in analyses}
         self.Osamples = {}
         for a in self.analyses.values():
            self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
             # Convert parameters to the correct sort of TensorFlow object
+            print("pars:", c.print_with_id(pars,id_only))
             pars_tf = self.convert_to_TF(pars)
+            print("pars_tf:", c.print_with_id(pars_tf,id_only))
             # Check that parameters are not NaN
             anynan = False
             nanpar = ""
@@ -157,6 +163,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                 msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
                 raise ValueError(msg)
             self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
+            print("self.pars:", c.print_with_id(self.pars,id_only))
             dists = {} 
             self.Asamples = {}
             for a in self.analyses.values():
@@ -179,7 +186,7 @@ class JointDistribution(tfd.JointDistributionNamed):
        for k,val in d.items():
            if isinstance(val,tf.Variable):
                out[k] = val # Already a Variable, no need to convert (and in fact bad to do so since it could break graph connections)
-               #print(k, 'was Variable, left alone:', val)
+               print(k, 'was Variable, left alone:', val)
            elif isinstance(val, Mapping):
                out[k] = self.convert_to_TF(val,constant) # We must go deeper
            else:
@@ -187,10 +194,11 @@ class JointDistribution(tfd.JointDistributionNamed):
                try:
                    if constant:
                        out[k] = tf.constant(val, dtype=c.TFdtype)
-                       #print(k, 'converted to constant:', val)
+                       #out[k] = tf.Variable(val, dtype=c.TFdtype)
+                       print(k, 'converted to constant:', val)
                    else:
                        out[k] = tf.Variable(val, dtype=c.TFdtype)
-                       #print(k, 'converted to Variable:', val)
+                       print(k, 'converted to Variable:', val)
                except Exception as e:
                    msg = "Failed to convert values for key {0} to TensorFlow format! See associated exception for more information. Values were: {1}".format(k,val)
                    raise ValueError(msg) from e

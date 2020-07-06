@@ -32,6 +32,7 @@ my_sample = {'Test normal::x': 4.3, 'Test normal::x_theta': 0, 'Test binned::n':
 # Convert standard numeric types to TensorFlow objects (must be float32)
 #my_sample = {k1: {k2: tf.constant(x,dtype="float32") for k2,x in inner.items()} for k1,inner in my_sample.items()}
 fixed_pars={"Test normal": {"sigma_t": sig_t}} # Extra fixed parameter for NormalDist analysis
+print("First 'fit_all'")
 q, joint_fitted, all_pars = joint.fit_all(my_sample,fixed_pars)
 print("q:", q)
 print(all_pars)
