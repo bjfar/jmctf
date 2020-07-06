@@ -10,12 +10,11 @@ from . import common as c
 #tmp
 #id_only = False
 
-def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
+def neg2LogL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise"""
     print("In neg2LogL:")
     print("pars:", pars)
     print("const_pars:", const_pars)
-    print("prescaled_pars:", pre_scaled_pars)
     if transform is not None:
         pars_t = transform(pars)
     else:
@@ -37,11 +36,14 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
         msg = "NaNs detected in parameter arrays during optimization! The fit may have become unstable and wandering into an invalid region of parameter space; please check your analysis setup. Parameter arrays containing NaNs were:{0}".format(nanpar)
         raise ValueError(msg)
 
-    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
+    # Parameters will enter this function pre-scaled such that MLEs have variance ~1
+    # So we need to set the pre-scaled flag for the JointDistribution constructor to
+    # avoid applying the scaling a second time.
+    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
     q = -2*joint.log_prob(data)
     print("q:", q)
     print("all_pars:", all_pars)
-    print("q parts:", joint.log_prob_parts(data))
+    print("logL parts:", joint.log_prob_parts(data))
 
     if tf.math.reduce_any(tf.math.is_nan(q)):
         # Attempt to locate components generating the nans
@@ -55,7 +57,7 @@ def neg2LogL(pars,const_pars,analyses,data,pre_scaled_pars,transform=None):
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
 
-def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_tag='',verbose=False):
+def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False):
     """Wrapper for optimizer step that skips it if the initial guesses are known
        to be exact MLEs"""
 
@@ -72,7 +74,6 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
     kwargs = {'const_pars': const_pars,
               'analyses': analyses,
               'data': data,
-              'pre_scaled_pars': pre_scaled_pars,
               'transform': transform
               }
     #print("pars:", pars) #c.print_with_id(pars,id_only))
@@ -111,7 +112,7 @@ def optimize(pars,const_pars,analyses,data,pre_scaled_pars,transform=None,log_ta
         all_pars = pars_t
     else:
         all_pars = c.deep_merge(const_pars,pars_t)
-    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars)
+    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
     return joint, q
 
 class JointDistribution(tfd.JointDistributionNamed):
@@ -123,19 +124,18 @@ class JointDistribution(tfd.JointDistributionNamed):
              objects as the 'analyses'. Needs to be generalised. 
     """
    
-    def __init__(self, analyses, pars=None, pre_scaled_pars=None):
+    def __init__(self, analyses, pars=None, pre_scaled_pars=False):
         """ 
         :param analyses: list of analysis-like objects to be combined
         :type analyses: list
         :param pars: dictionary of parameters for all analysis objects, to fix
                 parameters for sampling (default: None)
         :type pars: dictionary, optional
-        :param pre_scaled_pars: If 'all', all input parameters are already scaled 
+        :param pre_scaled_pars: If True, all input parameters are already scaled 
                 such that MLEs have variance of approx. 1 (for more stable fitting).
-                If 'nuis', only nuisance parameters have been scaled.
-                If None, all parameters are conventionally (i.e. not) scaled, and
+                If False, all parameters are conventionally (i.e. not) scaled, and
                 require scaling internally.
-        :type pre_scaled_pars: string or None, optional
+        :type pre_scaled_pars: bool, optional
         """
         
         self.analyses = {a.name: a for a in analyses}
@@ -156,7 +156,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             if anynan:
                 msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
                 raise ValueError(msg)
-            self.pars = self.scale_pars(pars_tf,pre_scaled_pars)
+            self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
             dists = {} 
             self.Asamples = {}
             for a in self.analyses.values():
@@ -170,7 +170,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
-        print("self.pars = ", self.pars)
+        #print("self.pars = ", self.pars)
 
     def convert_to_TF(self, d, constant=False):
        """Convert bottom-level entries of dictionary to TensorFlow objects, so long as they are numeric data"""
@@ -215,33 +215,35 @@ class JointDistribution(tfd.JointDistributionNamed):
        biased_analyses = copy.deepcopy(self.analyses)
        for a in biased_analyses.values():
            a.SR_b = a.SR_b + bias*np.sqrt(a.SR_b)
-       biased_joint = JointDistribution(biased_analyses.values(), self.pars, pre_scaled_pars='all')
+       biased_joint = JointDistribution(biased_analyses.values(), self.pars, pre_scaled_pars=True)
        samples = biased_joint.sample(N)
        logw = self.log_prob(samples) - biased_joint.log_prob(samples) # log(weight) for each sample
        return samples, logw
 
-    def scale_pars(self,pars,pre_scaled_pars):
+    def prepare_pars(self,pars,pre_scaled_pars=False):
         """Prepare default nuisance parameters and return scaled signal and nuisance parameters for each analysis
            (scaled such that MLE's in this parameterisation have
            variance of approx. 1"""
-        scaled_pars = {}
-        #print("pars:",pars)
+        all_pars = {}
+        #print("in prepare_pars; pars:",pars)
         for a in self.analyses.values():
             if a.name not in pars.keys(): raise KeyError("Parameters for analysis {0} not found!".format(a.name))
-            s_pars, s_nuis, us_nuis = a.scale_pars(pars[a.name],pre_scaled_pars)
-
-            # Logic to avoid applying scaling to parameters supplied with scaling already applied
-            if pre_scaled_pars is None:
-                #print("Scaling input parameters...")
-                scaled_pars[a.name] = {**s_pars, **s_nuis}    
-            elif pre_scaled_pars=='nuis':
-                #print("Scaling only signal parameters: nuisance parameters already scaled...")
-                scaled_pars[a.name] = {**s_pars, **us_nuis}
-            elif pre_scaled_pars=='all':
-                #print("No scaling applied: all parameters already scaled...")
-                scaled_pars[a.name] = pars[a.name]
-
-        return scaled_pars 
+            #print("  pars[{0}] = {1}".format(a.name,pars[a.name]))
+            # Apply scaling if not already done
+            p = pars[a.name] if pre_scaled_pars else a.scale_pars(pars[a.name])
+            # Throw warning about discarded parameters, in case user messed up the input
+            missing = []
+            for par in pars[a.name].keys():
+                if par not in p.keys():
+                    missing += [par]
+            if len(missing)>0:
+                msg = "***WARNING: the following unrecognised parameters were found in the parameter dictionary for analysis {0}: {1}\nThis is permitted, but please make sure it wasn't an accident.".format(a.name, missing)
+                print(msg)
+            #print("  p: ",p)
+            # Add default values for nuisance parameters if not provided
+            all_pars[a.name] = a.add_default_nuisance(p)
+        #print("   all_pars:", all_pars)
+        return all_pars 
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -252,13 +254,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         return descaled_pars
 
     def get_nuis_parameters(self,samples,fixed_pars):
-        """Samples vector and signal provided to compute good starting guesses for parameters"""
+        """Samples vector and signal provided to compute good starting guesses for parameters
+           (in scaled parameter space)"""
         pars = {}
         all_fixed_pars = {}
         for a in self.analyses.values():
-            p, fp = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),fixed_pars[a.name])
-            pars[a.name] = p
-            all_fixed_pars[a.name] = fp
+            p, fp = a.get_nuisance_tensorflow_variables(self.get_samples_for(a.name,samples),fixed_pars[a.name])                         # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
+            pars[a.name] = a.scale_pars(p)
+            all_fixed_pars[a.name] = a.scale_pars(fp)
         #print("pars:", c.print_with_id(pars,id_only))
         #print("fixed_pars:", c.print_with_id(fixed_pars,id_only))
         return pars, all_fixed_pars
@@ -270,7 +273,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         return c.remove_prefix(name,d)
 
     def get_all_parameters(self,samples,fixed_pars={}):
-        """Samples vector and signal provided to compute good starting guesses for parameters"""
+        """Samples vector and signal provided to compute good starting guesses for parameters
+           (in scaled parameter space)"""
         pars = {}
         all_fixed_pars = {}
         anynan = False
@@ -285,8 +289,9 @@ class JointDistribution(tfd.JointDistributionNamed):
                     if tf.math.reduce_any(tf.math.is_nan(val)):
                         anynan = True
                         nanpar += "\n    {0}::{1}".format(a.name,par)
-            pars[a.name] = p
-            all_fixed_pars[a.name] = fp
+            # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
+            pars[a.name] = a.scale_pars(p)
+            all_fixed_pars[a.name] = a.scale_pars(fp)
         if anynan:
             msg = "NaNs detected in parameter starting guesses! The samples used to inform the starting guesses may be invalid (e.g. negative counts for Poisson variables). Parameter starting guess arrays containing NaNs were:{0}".format(nanpar)
             raise ValueError(msg)
@@ -311,12 +316,17 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object)"""
         fp = self.convert_to_TF(fixed_pars,constant=True)
-        print("fp:", fp) #c.print_with_id(sig,id_only))
+        #print("fp:", fp) #c.print_with_id(sig,id_only))
         all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
-        print("all_nuis_pars:", all_nuis_pars) #c.print_with_id(nuis_pars,id_only))
-        print("all_fixed_pars:", all_fixed_pars) #c.print_with_id(fixed_pars,id_only))
-        joint_fitted, q = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,pre_scaled_pars='nuis',log_tag=log_tag,verbose=verbose)
-        return q, joint_fitted, all_nuis_pars
+        #print("all_nuis_pars:", all_nuis_pars) #c.print_with_id(nuis_pars,id_only))
+        #print("all_fixed_pars:", all_fixed_pars) #c.print_with_id(fixed_pars,id_only))
+        # Note, parameters obtained from get_nuis_parameters, and passed to
+        # the 'optimize' function, are SCALED. All of them, regardless of whether
+        # they actually vary in this instance.
+        joint_fitted, q = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
+
+        # Make sure to de-scale parameters before returning them to users!
+        return q, joint_fitted, self.descale_pars(all_nuis_pars)
 
     # TODO: Deprecated, but may need something like this again.
     #def fit_nuisance_and_scale(self,signal,samples,log_tag='',verbose=False):
@@ -356,8 +366,13 @@ class JointDistribution(tfd.JointDistributionNamed):
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
         fp = self.convert_to_TF(fixed_pars,constant=True)
         all_free_pars, all_fixed_pars = self.get_all_parameters(samples,fp)
-        joint_fitted, q = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,pre_scaled_pars='all',log_tag=log_tag,verbose=verbose)
-        return q, joint_fitted, all_free_pars
+        # Note, parameters obtained from get_all_parameters, and passed to
+        # the 'optimize' function, are SCALED. All of them, regardless of whether
+        # they actually vary in this instance. 
+        joint_fitted, q = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
+
+        # Make sure to de-scale parameters before returning them to users!
+        return q, joint_fitted, self.descale_pars(all_free_pars)
 
     def cat_pars(self,pars):
         """Stack tensorflow parameters in known order"""
@@ -406,7 +421,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("catted_pats:", catted_pars)
         with tf.GradientTape(persistent=True) as tape:
             inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
-            joint = JointDistribution(self.analyses.values(),inpars,pre_scaled_pars=None)
+            joint = JointDistribution(self.analyses.values(),inpars)
             q = -2*joint.log_prob(samples)
             grads = tape.gradient(q, catted_pars)
         #print("grads:", grads)
@@ -544,7 +559,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("theta_prof_dict:", theta_prof_dict)
         #print("signal:", signal)
         # Compute -2*log_prop
-        joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict),pre_scaled_pars=None)
+        joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
         q = -2*joint.log_prob(samples)
         return q
 

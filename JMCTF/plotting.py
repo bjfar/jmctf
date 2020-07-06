@@ -36,16 +36,17 @@ def plot_collection(data,ax_dict=None,**kwargs):
             if len(val.shape) == 0: s = 0 # This is a constant! Don't try to plot a distribution for it.
             elif len(val.shape) <= 2: s = 1
             else: s = val.shape[-1]
+            ax_dict_out[aname][v] = []
             for k in range(s):
                 if ax_dict is None:
                     ax = fig.add_subplot(na,maxsize,j+i*maxsize+1)
-                    ax_dict_out[aname][v] = ax
+                    ax_dict_out[aname][v] += [ax]
                     if j==0: ax.set_title(aname,fontsize=14)
                     if s==1: ax.set_xlabel("{0}".format(v))
                     else:    ax.set_xlabel("{0}[{1}]".format(v,k))
                     ax.set(yscale="log")
                 else:
-                    ax = ax_dict[aname][v]
+                    ax = ax_dict[aname][v][k]
                 sns.distplot(val[...,k], kde=False, ax=ax, norm_hist=True, **kwargs)
                 j+=1
     if ax_dict is None:

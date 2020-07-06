@@ -122,7 +122,7 @@ class BinnedAnalysis(BaseAnalysis):
         #print("rate:", s+b+theta_safe)
  
         # Poisson model
-        poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+1e-10) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
+        poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+c.reallysmall) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
         # Treat SR batch dims as event dims
         poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=1)
         tfds["n"] = poises0i
@@ -153,29 +153,34 @@ class BinnedAnalysis(BaseAnalysis):
 
         return tfds #, sample_layout, sample_count
 
-    def scale_pars(self,pars,pre_scaled_pars):
-        """Return scaled signal and nuisance parameters
-           (scaled such that MLE's in this parameterisation have
-           variance of approx. 1)
-           If not supplied, default nuisance parameters are prepared
-           and scaled (mostly to help generate samples for nominal
-           signal/background cases, so users don't have to know what
-           all the nuisance parameters are and manually set them to
-           nominal values)
+    def add_default_nuisance(self,pars):
+        """Prepare parameters to be fed to tensorflow model
+
+           Provides default ("nominal") values for nuisance
+           parameters if they are not specified.
+
+           Input is full parameter dictionary, with SCALED
+           parameters
         """
-        scaled_pars = {}
-        scaled_nuis = {}
-        unscaled_nuis = {}
-        #print("pars:",pars)
+        pars_out = {}
         if 'theta' not in pars.keys():
             # If values not provided, trigger shortcut to set nuisance parameters to zero. Useful for sample generation.
-            theta_in = tf.constant(0*pars['s'])
+            theta = tf.constant(0*pars['s'])
         else:
-            theta_in = pars['theta']
-        scaled_pars['s']     = pars['s'] / self.s_scaling
-        scaled_nuis['theta'] = theta_in / self.theta_scaling
-        unscaled_nuis['theta'] = theta_in
-        return scaled_pars, scaled_nuis, unscaled_nuis 
+            theta = pars['theta']
+        pars_out['s'] = pars['s']
+        pars_out['theta'] = theta
+        return pars_out
+
+    def scale_pars(self,pars):
+        """Apply scaling (to adjust MLEs to have var~1) to any valid 
+        parameters found in input pars dictionary"""
+        scaled_pars = {}
+        if 's' in pars.keys():
+            scaled_pars['s'] = pars['s'] / self.s_scaling
+        if 'theta' in pars.keys(): 
+            scaled_pars['theta'] = pars['theta'] / self.theta_scaling
+        return scaled_pars
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -193,6 +198,8 @@ class BinnedAnalysis(BaseAnalysis):
 
            Assumes target MLE value for nuisance 
            parameters is zero.
+
+           Requires unit-scaled parameters as input
         """
         Asamples = {}
         s = signal_pars['s'] * self.s_scaling
@@ -362,8 +369,8 @@ class BinnedAnalysis(BaseAnalysis):
                 print("l_MLE:",(s_MLE+b+theta_MLE)[acheck])
                 raise ValueError("{0} negative rate MLEs detected!".format(np.sum(acheck)))
 
-            seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i]
-            seeds[sr]['s']     = s_MLE / self.s_scaling[i]
+            seeds[sr]['theta'] = theta_MLE #/ self.theta_scaling[i]
+            seeds[sr]['s']     = s_MLE #/ self.s_scaling[i]
 
             #print("seeds[{0}], theta: {1}".format(sr,seeds[sr]['theta']))
             #print("seeds[{0}], s    : {1}".format(sr,seeds[sr]['s']))
@@ -562,6 +569,6 @@ class BinnedAnalysis(BaseAnalysis):
             # Did we get everything? Are there any NaNs left?
             nnans = np.sum(~np.isfinite(theta_MLE))
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
-            seeds[sr]['theta'] = theta_MLE / self.theta_scaling[i] # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
+            seeds[sr]['theta'] = theta_MLE #/ self.theta_scaling[i] # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
         #print("seeds:", seeds)
         return seeds
