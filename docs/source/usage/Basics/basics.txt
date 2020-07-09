@@ -9,9 +9,9 @@ In these sections you can find explanations and demonstrations on the basic usag
 
    combine_into_joint
    sample_from_joint
+   likelihood_ratio_tests
 
 ..
+   usage/Basics/combine_into_joint
    usage/Basics/sample_from_joint
-   usage/Basics/find_MLEs
-   usage/Basics/build_test_stats
-
+   usage/Basics/likelihood_ratio_tests

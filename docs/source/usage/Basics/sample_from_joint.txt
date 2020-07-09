@@ -18,8 +18,8 @@ In the previous section (:ref:`combine_into_joint_long`), having fitted our join
 
 As before, we can fit our distribution to these samples, and this time we will obtain maximum likelihood estimators for each sample independently::
 
-    >>> q_3, joint_fitted_3, all_pars_3 = joint.fit_all(samples)
-    >>> print(to_numpy(all_pars_3))
+    >>> q_3, joint_fitted_3, par_dict_3 = joint.fit_all(samples)
+    >>> print(to_numpy(par_dict_3["all"]))
     {'Test normal': 
      {'mu': array([10.776527 , 10.519511 ,  9.5911875], dtype=float32), 
       'theta': array([0., 0., 0.], dtype=float32), 
@@ -40,26 +40,27 @@ But back to the example. What we did here was a little weird; we sampled from a 
 
     >>> free, fixed, nuis = joint.get_parameter_structure()
     >>> print("free:", free)
-    {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
     >>> print("fixed:", fixed)
+    >>> print("nuis:", nuis)
+    free: {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
+    fixed: {'Test normal': {'sigma_t': 1}, 'Test binned': {}}
+    nuis {'Test normal': {'theta': 1}, 'Test binned': {'theta': 2}}
 
-    
+where 'free' are the free parameters in each analysis that can be fit to data, 'fixed' are non-fittable parameters that must be chosen by the user (or by theory), and 'nuis' are nuisance parameters that enter into the fit but which don't need to be specified when fixing parameters for sampling ("nominal" values for them can be automatically chosen internally).
 
-    >>> import numpy as np
-    >>> import tensorflow as tf
-    >>> from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
-    >>> norm = NormalAnalysis("Test normal", 5, 2) # (name, obs., std.dev.)
-    >>> bins = [("SR1", 10, 9, 2), # (name, obs., b, sigma_b)
-    ...         ("SR2", 50, 55, 4)]
-    >>> binned = BinnedAnalysis("Test binned", bins)
-    >>> joint = JointDistribution([norm,binned])
+To fix some "null hypothesis" input parameters for the analyses we need to provide the parameters from the "free" and "fixed" dictionaries above, but not the "nuis" parameters. For example::
 
-Next, set some input (e.g. "null") parameters for the analyses::
-
-    >>> free, fixed, nuis = joint.get_parameter_structure()
-    >>> print("free:", free)
-    {'Test normal': {'mu': 1}, 'Test binned': {'s': 2}}
-
-    >>> null = {'Test normal': {'mu': [[0.]], 'nuisance': None}, 'Test binned': {'s': [[0., 0.]], 'nuisance': None}}
+    >>> null = {'Test normal': {'mu': [0.], 'sigma_t': [1.]}, 'Test binned': {'s': [(0., 0.)]}}
     >>> joint_null = joint.fix_parameters(null)
 
+We can then sample from this null distribution and fit the free parameters:
+
+    >>> samples = joint_null.sample(1e6)
+    >>> q_full, joint_fitted_full, par_dicts_full = joint.fit_all(samples,null)
+    >>> q_nuis, joint_fitted_nuis, par_dicts_nuis = joint.fit_nuisance(samples, null)
+
+As before (i.e. in the :ref:`combine_into_joint_long` section), we use the :py:meth:`fit_all <.JointDistribution.fit_all>` method of our `JointDistribution` object to fit all the free parameters to our samples. Last time we didn't use the second argument, but it is used to supply a parameter dictionary of the "fixed" parameter values to use during the fitting, if any exist. Here we just gave it the full "null hypothesis" parameter dictionary, but all the parameters aside from the fixed parameter 'sigma_t' were ignored.
+
+After this, we used the :py:meth:`fit_nuisance <.JointDistribution.fit_nuisance>` method to fit *only* the nuisance parameters in the analyses to data, with all the other "free" parameters fixed to values specified in the parameter dictionary given in the second argument. So here the "null hypothesis" values of 'mu' and 's' were taken as fixed, while both 'theta' parameters have been fit.
+
+In the next section, :ref:`likelihood_ratio_tests_long`, we will see how the results of these fits can be understood in terms of likelihood ratio tests.

@@ -47,9 +47,6 @@ class NormalAnalysis(BaseAnalysis):
 
         # Need to construct these shapes to match the event_shape, batch_shape, sample_shape 
         # semantics of tensorflow_probability.
-
-        id_only=True
-        print("pars in model:",c.print_with_id(pars,id_only))
         tfds = {}
         mu = pars['mu'] * self.mu_scaling
         theta = pars['theta'] * self.theta_scaling 
@@ -57,13 +54,6 @@ class NormalAnalysis(BaseAnalysis):
         # Normal models
         norm       = tfd.Normal(loc=mu+theta, scale=self.sigma) # TODO: shapes probably need adjustment
         norm_theta = tfd.Normal(loc=theta, scale=pars['sigma_t'])
-
-        print("pars in model (physical scaling):")
-        print("#######################")
-        print("mu:", mu)
-        print("mu+theta:", mu+theta)
-        print("theta:", theta)
-        print("#######################")
 
         # Store model in distribution dictionary
         # Naming is import for (TODO: can't remember?)
@@ -82,19 +72,15 @@ class NormalAnalysis(BaseAnalysis):
         """
          
         pars_out = {}
-        print("pars:", pars)
-
         if 'theta' not in pars.keys():
             # trigger shortcut to set nuisance parameters to zero. Useful for sample generation. 
             theta = tf.constant(0*pars['mu'])
-            print("ADDED DEFAULT THETA:", theta)
         else:
             theta = pars['theta']
 
         if 'sigma_t' not in pars.keys():
             # Default for when no extra "theory" uncertainty is provided
             sigma_t = tf.constant(c.reallysmall,dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
-            print("ADDED DEFAULT SIGMA_T:", sigma_t)
         else:
             sigma_t = pars['sigma_t'] 
 
@@ -181,20 +167,17 @@ class NormalAnalysis(BaseAnalysis):
         theta_MLE = ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
         free_pars = {"theta": theta_MLE} # Use exact "starting guess", assuming mu is fixed.
         all_fixed_pars = {"mu": mu, "sigma_t": sigma_t} # mu is fixed in nuisance-parameter-only fits
-        #print("In 'get_nuisance_tensorflow_variables'")
-        #print("tf pars:", pars)
-        #print("tf all_fixed_pars:", all_fixed_pars)
 
-        chi2_x = (mu + theta_MLE - x)**2 / self.sigma**2
-        chi2_xt = (theta_MLE - x_theta)**2 / sigma_t**2
-        #print("chi2_x:", chi2_x)
-        #print("chi2_xt:", chi2_xt)
-        #print("chi2:", chi2_x + chi2_xt)
-        const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
-        const_xt = np.log(2*np.pi) + 2*np.log(sigma_t)
-        #print("-2logL_x:", chi2_x + const_x)
-        #print("-2logL_xt:", chi2_xt + const_xt)
-        #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
+        # chi2_x = (mu + theta_MLE - x)**2 / self.sigma**2
+        # chi2_xt = (theta_MLE - x_theta)**2 / sigma_t**2
+        # #print("chi2_x:", chi2_x)
+        # #print("chi2_xt:", chi2_xt)
+        # #print("chi2:", chi2_x + chi2_xt)
+        # const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
+        # const_xt = np.log(2*np.pi) + 2*np.log(sigma_t)
+        # #print("-2logL_x:", chi2_x + const_x)
+        # #print("-2logL_xt:", chi2_xt + const_xt)
+        # #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
         return free_pars, all_fixed_pars
 
     def get_all_parameters(self,sample_dict,fixed_pars):
@@ -205,8 +188,6 @@ class NormalAnalysis(BaseAnalysis):
 
            Should return "physical", i.e. non-scaled, initial guesses for parameters
         """
-        #print("In 'get_nuisance_tensorflow_variables'")
-        #print("fixed_pars:", fixed_pars)
         x = sample_dict["x"]
         x_theta = sample_dict["x_theta"]
         mu_MLE = x - x_theta
@@ -217,19 +198,17 @@ class NormalAnalysis(BaseAnalysis):
         else:
             sigma_t = c.reallysmall # Default TODO: Cannot use exactly zero 
         fixed_pars_out = {"sigma_t": sigma_t}
-        #print("tf free_pars:", free_pars)
-        #print("tf fixed_pars_out:", fixed_pars_out)
-        #print("self.sigma:", self.sigma)
-        chi2_x = (mu_MLE + theta_MLE - x)**2 / self.sigma**2
-        chi2_xt = (theta_MLE - x_theta)**2 / sigma_t.numpy()**2
-        #print("chi2_x:", chi2_x)
-        #print("chi2_xt:", chi2_xt)
-        #print("chi2:", chi2_x + chi2_xt)
-        const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
-        const_xt = np.log(2*np.pi) + 2*np.log(sigma_t.numpy())
-        #print("-2logL_x:", chi2_x + const_x)
-        #print("-2logL_xt:", chi2_xt + const_xt)
-        #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
+        
+        # chi2_x = (mu_MLE + theta_MLE - x)**2 / self.sigma**2
+        # chi2_xt = (theta_MLE - x_theta)**2 / sigma_t.numpy()**2
+        # #print("chi2_x:", chi2_x)
+        # #print("chi2_xt:", chi2_xt)
+        # #print("chi2:", chi2_x + chi2_xt)
+        # const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
+        # const_xt = np.log(2*np.pi) + 2*np.log(sigma_t.numpy())
+        # #print("-2logL_x:", chi2_x + const_x)
+        # #print("-2logL_xt:", chi2_xt + const_xt)
+        # #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
         return free_pars, fixed_pars_out
 
 

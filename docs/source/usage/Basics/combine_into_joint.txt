@@ -40,8 +40,8 @@ Knowing this information, we can manually construct a sample for the full joint 
     ...              'Test binned::n': [9,53], \
     ...              'Test binned::x': [0,0]}
 
-    >>> q, joint_fitted, all_pars = joint.fit_all(my_sample)
-    >>> print(all_pars)
+    >>> q, joint_fitted, par_dicts = joint.fit_all(my_sample)
+    >>> print(par_dicts["all"])
     {'Test normal': 
      {'mu': <tf.Variable 'mu:0' shape=() dtype=float32, numpy=4.3>, 
       'theta': <tf.Variable 'theta:0' shape=() dtype=float32, numpy=0.0>, 
@@ -53,14 +53,14 @@ Knowing this information, we can manually construct a sample for the full joint 
 The output is not so pretty because the parameters are TensorFlow objects. We can convert them to numpy with the :py:func:`common.to_numpy` function for better viewing::
 
     >>> from JMCTF.common import to_numpy
-    >>> print(to_numpy(all_pars))
+    >>> print(to_numpy(par_dicts["all"]))
     {'Test normal': 
       {'mu': 4.3, 'theta': 0.0, 'sigma_t': 0.0}, 
      'Test binned': 
       {'s': array([ 0.        , -0.23735635], dtype=float32), 
        'theta': array([0., 0.], dtype=float32)}}
 
-The :py:meth:`fit_all <.JointDistribution.fit_all>` method fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and a dictionary of the fitted parameter values. 
+The :py:meth:`fit_all <.JointDistribution.fit_all>` method fits all the free parameters in the full joint distribution to the supplied samples, and returns `q` (negative 2 times the log probability density for the samples under the fitted model(s)), a new `JointDistribution` object fitted to the samples (the original remains unchanged), and three dictionaries of parameter values ("all" parameters, just the "fitted" parameters", and just the "fixed" parameters) packed into a dictionary.
 
 Here we have only fit the PDF to one sample, however the power of JMCTF really lies in fitting the PDF to lots of samples quickly. Of course manually creating lots of samples is tedious and not very useful; a more standard workflow is to actually *sample* the samples from the PDF under some fixed "null hypothesis" parameter values. We cover this in :ref:`sample_from_joint_long`.
 

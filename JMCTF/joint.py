@@ -14,9 +14,9 @@ def neg2LogL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise
        TODO: parameter 'transform' feature not currently in use, probably doesn't work correctly
     """
-    print("In neg2LogL:")
-    print("pars:", c.print_with_id(pars,id_only))
-    print("const_pars:", c.print_with_id(const_pars,id_only))
+    #print("In neg2LogL:")
+    #print("pars:", c.print_with_id(pars,id_only))
+    #print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
         pars_t = transform(pars)
     else:
@@ -43,7 +43,7 @@ def neg2LogL(pars,const_pars,analyses,data,transform=None):
     # avoid applying the scaling a second time.
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
     q = -2*joint.log_prob(data)
-    print("q:", q)
+    #print("q:", q)
     #print("all_pars:", all_pars)
     #print("logL parts:", joint.log_prob_parts(data))
 
@@ -62,7 +62,6 @@ def neg2LogL(pars,const_pars,analyses,data,transform=None):
 def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False):
     """Wrapper for optimizer step that skips it if the initial guesses are known
        to be exact MLEs"""
-    verbose=True
     opts = {"optimizer": "Adam",
             "step": 0.05,
             "tol": 0.01,
@@ -77,16 +76,16 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
               'data': data,
               'transform': transform
               }
-    print("In 'optimize'")
-    print("pars:", c.print_with_id(pars,id_only))
-    print("const_pars:", c.print_with_id(const_pars,id_only))
+    #print("In 'optimize'")
+    #print("pars:", c.print_with_id(pars,id_only))
+    #print("const_pars:", c.print_with_id(const_pars,id_only))
 
     # Convert free parameter initial guesses into TensorFlow Variable objects
     free_pars = c.convert_to_TF_variables(pars) 
 
-    print("Converted free parameters into TensorFlow Variables:")
-    print("free_pars:", free_pars)
-    print("free_pars (id):", c.print_with_id(free_pars,id_only))
+    #print("Converted free parameters into TensorFlow Variables:")
+    #print("free_pars:", free_pars)
+    #print("free_pars (id):", c.print_with_id(free_pars,id_only))
 
     # Sanity check input parameters
     anynan = False
@@ -129,8 +128,8 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         #f = tf.function(mm.tools.func_partial(neg2LogL,**kwargs))
         kwargs["const_pars"] = enlarged_const_pars
         f = mm.tools.func_partial(neg2LogL,**kwargs)
-        print("About to enter optimizer")
-        print("pars:", c.print_with_id(reduced_free_pars,False))
+        #print("About to enter optimizer")
+        #print("pars:", c.print_with_id(reduced_free_pars,False))
         q, none, none = mm.optimize(reduced_free_pars, f, **opts)
 
     # Rebuild distribution object with fitted parameters for output to user
@@ -174,7 +173,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                 require scaling internally.
         :type pre_scaled_pars: bool, optional
         """
-        print("In JointDistribution constructor (pre_scaled_pars={0})".format(pre_scaled_pars))
+        #print("In JointDistribution constructor (pre_scaled_pars={0})".format(pre_scaled_pars))
          
         self.analyses = {a.name: a for a in analyses}
         self.Osamples = {}
@@ -182,9 +181,9 @@ class JointDistribution(tfd.JointDistributionNamed):
            self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
             # Convert parameters to TensorFlow constants, if not already TensorFlow objects
-            print("pars:", c.print_with_id(pars,id_only))
+            #print("pars:", c.print_with_id(pars,id_only))
             pars_tf = c.convert_to_TF_constants(pars,ignore_variables=True)
-            print("pars_tf:", c.print_with_id(pars_tf,id_only))
+            #print("pars_tf:", c.print_with_id(pars_tf,id_only))
             # Check that parameters are not NaN
             anynan = False
             nanpar = ""
@@ -197,7 +196,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                 msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
                 raise ValueError(msg)
             self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
-            print("self.pars:", c.print_with_id(self.pars,id_only))
+            #print("self.pars:", c.print_with_id(self.pars,id_only))
             dists = {} 
             self.Asamples = {}
             for a in self.analyses.values():
@@ -346,17 +345,21 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object)"""
         fp = c.convert_to_TF_constants(fixed_pars)
-        #print("fp:", fp) #c.print_with_id(sig,id_only))
         all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
-        print("all_nuis_pars:", all_nuis_pars) #c.print_with_id(nuis_pars,id_only))
-        print("all_fixed_pars:", all_fixed_pars) #c.print_with_id(fixed_pars,id_only))
+
         # Note, parameters obtained from get_nuis_parameters, and passed to
         # the 'optimize' function, are SCALED. All of them, regardless of whether
         # they actually vary in this instance.
         joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
 
         # Make sure to de-scale parameters before returning them to users!
-        return q, joint_fitted, self.descale_pars(all_pars), self.descale_pars(fitted_pars), self.descale_pars(const_pars)
+        # Also it is nice to pack up the various parameter splits into a dictionary
+        par_dict = {}
+        par_dict["all"] = self.descale_pars(all_pars)
+        par_dict["fitted"] = self.descale_pars(fitted_pars)
+        par_dict["fixed"]  = self.descale_pars(const_pars)
+        return q, joint_fitted, par_dict 
+
 
     # TODO: Deprecated, but may need something like this again.
     #def fit_nuisance_and_scale(self,signal,samples,log_tag='',verbose=False):
@@ -396,15 +399,19 @@ class JointDistribution(tfd.JointDistributionNamed):
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
         fp = c.convert_to_TF_constants(fixed_pars)
         all_free_pars, all_fixed_pars = self.get_all_parameters(samples,fp)
+
         # Note, parameters obtained from get_all_parameters, and passed to
         # the 'optimize' function, are SCALED. All of them, regardless of whether
         # they actually vary in this instance.
-        print("all_free_pars:", all_free_pars)
-        print("all_fixed_pars:", all_fixed_pars)
         joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
 
         # Make sure to de-scale parameters before returning them to users!
-        return q, joint_fitted, self.descale_pars(all_pars), self.descale_pars(fitted_pars), self.descale_pars(const_pars)
+        # Also it is nice to pack up the various parameter splits into a dictionary
+        par_dict = {}
+        par_dict["all"] = self.descale_pars(all_pars)
+        par_dict["fitted"] = self.descale_pars(fitted_pars)
+        par_dict["fixed"]  = self.descale_pars(const_pars)
+        return q, joint_fitted, par_dict 
 
     def cat_pars(self,pars):
         """Stack tensorflow parameters in known order"""

@@ -34,9 +34,9 @@ my_sample = {'Test normal::x': 4.3, 'Test normal::x_theta': 0, 'Test binned::n':
 #my_sample = {k1: {k2: tf.constant(x,dtype="float32") for k2,x in inner.items()} for k1,inner in my_sample.items()}
 fixed_pars={"Test normal": {"sigma_t": sig_t}} # Extra fixed parameter for NormalDist analysis
 print("First 'fit_all'")
-q, joint_fitted, all_pars, fitted_pars, const_pars = joint.fit_all(my_sample,fixed_pars)
+q, joint_fitted, par_dicts = joint.fit_all(my_sample) #,fixed_pars)
 print("q:", q)
-print(all_pars)
+print(par_dicts)
 # The output is not so pretty because the parameters are TensorFlow objects
 # We can convert them to numpy for better viewing:
 def to_numpy(d):
@@ -45,14 +45,14 @@ def to_numpy(d):
         if isinstance(v, dict): out[k] = to_numpy(v)
         else: out[k] = v.numpy()
     return out
-print(to_numpy(all_pars))
+print(to_numpy(par_dicts["all"]))
 # sample
 samples = joint_fitted.sample(10)
 #print("samples:", samples)
 print("samples:",to_numpy(samples))
 
-q_3, joint_fitted_3, all_pars_3, fitted_pars_3, const_pars_3 = joint.fit_all(samples,fixed_pars)
-print(to_numpy(all_pars_3))
+q_3, joint_fitted_3, par_dicts_3 = joint.fit_all(samples,fixed_pars)
+print(to_numpy(par_dicts_3["all"]))
 
 # null model
 # Learn parameters that we are required to supply
@@ -70,9 +70,10 @@ samples = joint_null.sample(3)
 print("***********************")
 print("FITTING ALL PARS")
 print("***********************")
-q_fit, joint_fitted_null, all_pars_null, fitted_pars_null, const_pars_null = joint.fit_all(samples,fixed_pars)
+q_fit, joint_fitted_null, par_dicts_null = joint.fit_all(samples,null)
 print("samples:", to_numpy(samples))
-print("all fitted parameters:", all_pars_null)
+print("par_dicts_null:", par_dicts_null)
+print("all fitted parameters:", par_dicts_null["fitted"])
 print("q_fit:", q_fit)
 print("q_recalc:", -2*joint_fitted_null.log_prob(samples))
 print("logL parts:", joint_fitted_null.log_prob_parts(samples))
@@ -85,6 +86,7 @@ print("trainable_variables:", joint_fitted_null.trainable_variables)
 check=False
 if check:
     print("Checking MLEs and q calculations:")
+    all_pars_null = par_dicts_null["all"]
     for i in range(3):
         x = samples["Test normal::x"][i]
         x_theta = samples["Test normal::x_theta"][i]
@@ -103,9 +105,9 @@ if check:
 print("***********************")
 print("FITTING NUISANCE PARS")
 print("***********************")
-q_null, joint_fitted_nuis, all_pars_nuis, fitted_pars_nuis, const_pars_nuis = joint.fit_nuisance(samples, null)
-print("all_pars_null (3):", to_numpy(all_pars_null))
-print("all_pars_nuis (3)    :", to_numpy(all_pars_nuis))
+q_null, joint_fitted_nuis, par_dicts_nuis = joint.fit_nuisance(samples, null)
+print("all_pars_null (3):", to_numpy(par_dicts_null["all"]))
+print("all_pars_nuis (3)    :", to_numpy(par_dicts_nuis["all"]))
 
 LLR = q_null - q_fit
 print("q_fit:", q_fit)
@@ -115,23 +117,23 @@ print("LLR:",LLR)
 print("============================")
 
 # Inspect shapes
-print({k1: {k2: v2.shape for k2,v2 in v1.items()} for k1,v1 in to_numpy(all_pars_null).items()})
+print({k1: {k2: v2.shape for k2,v2 in v1.items()} for k1,v1 in to_numpy(par_dicts_null["all"]).items()})
 
 # Ramp it up, plot all samples, plot MLEs.
 samples = joint_null.sample(1e6)
 shapes = {k: v.shape for k,v in samples.items()}
 print(shapes)
-q_fit, joint_fitted_null, all_pars_null, fitted_pars_null, const_pars_null = joint.fit_all(samples,fixed_pars,verbose=verb)
+q_fit, joint_fitted_null, par_dicts_null = joint.fit_all(samples,fixed_pars,verbose=verb)
 
 print("Fitting null hypothesis")
-q_null, joint_fitted_nuis, all_pars_nuis, fitted_pars_nuis, const_pars_nuis = joint.fit_nuisance(samples, null, verbose=verb)
+q_null, joint_fitted_nuis, par_dicts_nuis = joint.fit_nuisance(samples, null, verbose=verb)
 LLR = q_null - q_fit
 print("q_fit:", q_fit)
 print("q_null:", q_null)
 print("LLR:",LLR)
 
-print("all_pars_null (1e6):", to_numpy(all_pars_null))
-print("all_pars_nuis (1e6)    :", to_numpy(all_pars_nuis))
+print("all_pars_null (1e6):", to_numpy(par_dicts_null["all"]))
+print("all_pars_nuis (1e6)    :", to_numpy(par_dicts_nuis["all"]))
 
 import matplotlib.pyplot as plt
 from JMCTF.plotting import plot_sample_dist, plot_MLE_dist
@@ -140,8 +142,8 @@ fig, ax_dict = plot_sample_dist(samples)
 fig.tight_layout()
 fig.savefig("quickstart_sample_dists.svg")
 
-fig, ax_dict = plot_MLE_dist(fitted_pars_null)
-plot_MLE_dist(fitted_pars_nuis,ax_dict) # Overlay nuis MLE dists onto full MLE dists
+fig, ax_dict = plot_MLE_dist(par_dicts_null["fitted"])
+plot_MLE_dist(par_dicts_nuis["fitted"],ax_dict) # Overlay nuis MLE dists onto full MLE dists
 fig.tight_layout()
 fig.savefig("quickstart_MLE_dists.svg")
 

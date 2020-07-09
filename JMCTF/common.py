@@ -166,14 +166,14 @@ def convert_to_TF_variables(d):
    for k,val in d.items():
        if isinstance(val,tf.Variable):
            out[k] = val # Already a Variable, no need to convert
-           print(k, 'was tf.Variable, left alone:', val)
+           #print(k, 'was tf.Variable, left alone:', val)
        elif isinstance(val, Mapping):
            out[k] = convert_to_TF_variables(val) # We must go deeper
        else:
            # Try to create tensorflow variable from this data
            try:
                out[k] = tf.Variable(val, dtype=TFdtype)
-               print(k, 'converted to Variable:', val)
+               #print(k, 'converted to Variable:', val)
            except Exception as e:
                msg = "Failed to convert values for key {0} to a TensorFlow Variable object! See associated exception for more information. Values were: {1}".format(k,val)
                raise ValueError(msg) from e
@@ -198,14 +198,14 @@ def convert_to_TF_constants(d,ignore_variables=False):
                raise TypeError(msg)
        elif isinstance(val,tf.Tensor):
            out[k] = val
-           print(k, 'was already tf.Tensor, left alone:', val)  
+           #print(k, 'was already tf.Tensor, left alone:', val)  
        elif isinstance(val, Mapping):
            out[k] = convert_to_TF_constants(val,ignore_variables) # We must go deeper
        else:
            # Try to create tensorflow variable or constant from this data
            try:
                out[k] = tf.constant(val, dtype=TFdtype)
-               print(k, 'converted to tf.Tensor:', val)
+               #print(k, 'converted to tf.Tensor:', val)
            except Exception as e:
                msg = "Failed to convert values for key {0} to a TensorFlow Tensor object! See associated exception for more information. Values were: {1}".format(k,val)
                raise ValueError(msg) from e

@@ -1,0 +1,35 @@
+.. _likelihood_ratio_tests_long:
+
+Find MLEs and conduct simple likelihood ratio tests
+========================================================
+
+In the previous section (:ref:`sample_from_joint_long`) we learned how to sample from a given :py:class:`.JointDistribution` under a fixed set of null hypothesis parameter values, and how to fit all the free and nuisance parameters for that joint distribution to the simulated data. Now, we investigate the results of those fits and use them to construct likelihood ratio test statistics.
+
+Recall that we had the following fit results::
+
+    >>> q_full, joint_fitted_full, par_dicts_full = joint.fit_all(samples,null)
+    >>> q_nuis, joint_fitted_nuis, par_dicts_nuis = joint.fit_nuisance(samples, null)
+
+Here, `par_dicts_full` and `par_dicts_nuis` contain the free and nuisance, and nuisance-only, parameters fitted to the same set of `samples`, with non-nuisance free parameters set to null hypothesis values in the latter case. By `fitted` I mean that we have obtained maximum likelihood estimators (MLEs) for those parameters under the simulated samples. I will not explain the full theory of likelihood ratio tests here --- for a basic overview the `wikipedia page <https://en.wikipedia.org/wiki/Likelihood-ratio_test>`_ is not bad --- but the reason we have done these particular fits is because the combination `q_nuis - q_full` corresponds to a standard type of likelihood ratio test statistic and asymptotically follows a chi-squared distribution (when the free parameters in the nuisance-only fit are set to the values used to simulate the samples, i.e. their "true" values). This can be demonstrated with a simple plot::
+
+    LLR = q_nuis - q_full # -2*log( L_nuis / L_full )
+    DOF = 3   
+ 
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from tensorflow_probability import distributions as tfd
+    fig = plt.figure(figsize=(5,3))
+    ax = fig.add_subplot(111)
+    ax.set_xlabel("LLR")
+    ax.set(yscale="log")
+    sns.distplot(LLR, color='b', kde=False, ax=ax, norm_hist=True, label="JMCTF")
+    q = np.linspace(0, np.max(LLR),1000)
+    chi2 = tf.math.exp(tfd.Chi2(df=DOF).log_prob(q))
+    ax.plot(q,chi2,color='b',lw=2,label="chi^2 (DOF={0})".format(DOF))
+    ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    fig.tight_layout()
+    plt.show()
+
+.. image:: quickstart_LLR.svg
+  :width: 400
+ 
