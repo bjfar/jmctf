@@ -245,22 +245,22 @@ class BinnedAnalysis(BaseAnalysis):
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
         return {"theta": len(self.SR_b)} # Just one nuisance parameter per signal region, packaged into one tensor. 
 
-    def get_nuisance_tensorflow_variables(self,sample_dict,fixed_pars):
+    def get_nuisance_parameters(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""
         seeds = self.get_seeds_nuis(sample_dict,fixed_pars) # Get initial guesses for nuisance parameter MLEs
         stacked_seeds = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
-        thetas = {"theta": tf.Variable(stacked_seeds, dtype=c.TFdtype, name='theta')}
-        fixed_pars_out = {"s": tf.constant(fixed_pars["s"], dtype=c.TFdtype, name='s')}
-        return thetas, fixed_pars
+        free_pars = {"theta": stacked_seeds} 
+        fixed_pars_out = {"s": fixed_pars["s"]} 
+        return free_pars, fixed_pars
 
-    def get_all_tensorflow_variables(self,sample_dict,fixed_pars):
+    def get_all_parameters(self,sample_dict,fixed_pars):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model"""
         seeds = self.get_seeds_s_and_nuis(sample_dict) # Get initial guesses for parameter MLEs
         stacked_theta = np.stack([seeds[sr]['theta'] for sr in self.SR_names],axis=-1)
         stacked_s     = np.stack([seeds[sr]['s'] for sr in self.SR_names],axis=-1)
-        pars = {"s": tf.Variable(stacked_s, dtype=c.TFdtype, name='s'),
-                "theta": tf.Variable(stacked_theta, dtype=c.TFdtype, name='theta')}
-        return pars, {}
+        free_pars = {"s": stacked_s, "theta": stacked_theta}
+        fixed_pars = {}
+        return free_pars, fixed_pars
         
     def as_dict_short_form(self):
         """Add contents to dictionary, ready for dumping to YAML file

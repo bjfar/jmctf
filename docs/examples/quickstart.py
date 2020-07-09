@@ -17,10 +17,11 @@ bins = [("SR1", 10, 9, 2),
         ("SR2", 50, 55, 4)]
 binned = BinnedAnalysis("Test binned", bins)
 # make_joint
-#joint = JointDistribution([norm,binned])
+joint = JointDistribution([norm,binned])
 #joint = JointDistribution([binned])
-joint = JointDistribution([norm])
-DOF = 1
+#joint = JointDistribution([norm])
+#DOF = 1
+DOF = 3
 
 sig_t = 1.
 
@@ -33,7 +34,7 @@ my_sample = {'Test normal::x': 4.3, 'Test normal::x_theta': 0, 'Test binned::n':
 #my_sample = {k1: {k2: tf.constant(x,dtype="float32") for k2,x in inner.items()} for k1,inner in my_sample.items()}
 fixed_pars={"Test normal": {"sigma_t": sig_t}} # Extra fixed parameter for NormalDist analysis
 print("First 'fit_all'")
-q, joint_fitted, all_pars = joint.fit_all(my_sample,fixed_pars)
+q, joint_fitted, all_pars, fitted_pars, const_pars = joint.fit_all(my_sample,fixed_pars)
 print("q:", q)
 print(all_pars)
 # The output is not so pretty because the parameters are TensorFlow objects
@@ -50,7 +51,7 @@ samples = joint_fitted.sample(10)
 #print("samples:", samples)
 print("samples:",to_numpy(samples))
 
-q_3, joint_fitted_3, all_pars_3 = joint.fit_all(samples,fixed_pars)
+q_3, joint_fitted_3, all_pars_3, fitted_pars_3, const_pars_3 = joint.fit_all(samples,fixed_pars)
 print(to_numpy(all_pars_3))
 
 # null model
@@ -69,7 +70,7 @@ samples = joint_null.sample(3)
 print("***********************")
 print("FITTING ALL PARS")
 print("***********************")
-q_fit, joint_fitted_null, all_pars_null = joint.fit_all(samples,fixed_pars)
+q_fit, joint_fitted_null, all_pars_null, fitted_pars_null, const_pars_null = joint.fit_all(samples,fixed_pars)
 print("samples:", to_numpy(samples))
 print("all fitted parameters:", all_pars_null)
 print("q_fit:", q_fit)
@@ -102,9 +103,9 @@ if check:
 print("***********************")
 print("FITTING NUISANCE PARS")
 print("***********************")
-q_null, joint_fitted_nuis, pars_nuis = joint.fit_nuisance(samples, null)
+q_null, joint_fitted_nuis, all_pars_nuis, fitted_pars_nuis, const_pars_nuis = joint.fit_nuisance(samples, null)
 print("all_pars_null (3):", to_numpy(all_pars_null))
-print("pars_nuis (3)    :", to_numpy(pars_nuis))
+print("all_pars_nuis (3)    :", to_numpy(all_pars_nuis))
 
 LLR = q_null - q_fit
 print("q_fit:", q_fit)
@@ -120,17 +121,17 @@ print({k1: {k2: v2.shape for k2,v2 in v1.items()} for k1,v1 in to_numpy(all_pars
 samples = joint_null.sample(1e6)
 shapes = {k: v.shape for k,v in samples.items()}
 print(shapes)
-q_fit, joint_fitted_null, all_pars_null = joint.fit_all(samples,fixed_pars,verbose=verb)
+q_fit, joint_fitted_null, all_pars_null, fitted_pars_null, const_pars_null = joint.fit_all(samples,fixed_pars,verbose=verb)
 
 print("Fitting null hypothesis")
-q_null, joint_fitted_nuis, pars_nuis = joint.fit_nuisance(samples, null, verbose=verb)
+q_null, joint_fitted_nuis, all_pars_nuis, fitted_pars_nuis, const_pars_nuis = joint.fit_nuisance(samples, null, verbose=verb)
 LLR = q_null - q_fit
 print("q_fit:", q_fit)
 print("q_null:", q_null)
 print("LLR:",LLR)
 
 print("all_pars_null (1e6):", to_numpy(all_pars_null))
-print("pars_nuis (1e6)    :", to_numpy(pars_nuis))
+print("all_pars_nuis (1e6)    :", to_numpy(all_pars_nuis))
 
 import matplotlib.pyplot as plt
 from JMCTF.plotting import plot_sample_dist, plot_MLE_dist
@@ -139,8 +140,8 @@ fig, ax_dict = plot_sample_dist(samples)
 fig.tight_layout()
 fig.savefig("quickstart_sample_dists.svg")
 
-fig, ax_dict = plot_MLE_dist(all_pars_null)
-plot_MLE_dist(pars_nuis,ax_dict) # Overlay nuis MLE dists onto full MLE dists
+fig, ax_dict = plot_MLE_dist(fitted_pars_null)
+plot_MLE_dist(fitted_pars_nuis,ax_dict) # Overlay nuis MLE dists onto full MLE dists
 fig.tight_layout()
 fig.savefig("quickstart_MLE_dists.svg")
 

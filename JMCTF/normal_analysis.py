@@ -30,7 +30,7 @@ class NormalAnalysis(BaseAnalysis):
         self.mu_scaling = sigma
         self.theta_scaling = sigma # Assumes extra model-dependent error will be somewhat similar to sigma
         self.x_obs = x_obs
-        self.exact_MLEs = True # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
+        self.exact_MLEs =  True # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
         
     def tensorflow_model(self,pars):
         """Output tensorflow probability model object, to be combined with models from
@@ -167,7 +167,7 @@ class NormalAnalysis(BaseAnalysis):
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
         return {"theta": 1} # theta is a scalar
 
-    def get_nuisance_tensorflow_variables(self,sample_dict,fixed_pars):
+    def get_nuisance_parameters(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model
            (initial guesses assume fixed "signal" parameters)
         """
@@ -179,9 +179,8 @@ class NormalAnalysis(BaseAnalysis):
         else:
             sigma_t = c.reallysmall # TODO: Cannot use exactly zero 
         theta_MLE = ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
-        pars = {"theta": tf.Variable(theta_MLE, dtype=c.TFdtype, name='theta')} # Use exact "starting guess", assuming mu is fixed.
-        all_fixed_pars = {"mu": tf.constant(mu, dtype=c.TFdtype, name='mu'), # mu fixed in nuisance-parameter-only fits
-                          "sigma_t": tf.constant(sigma_t, dtype=c.TFdtype, name='sigma_t')}
+        free_pars = {"theta": theta_MLE} # Use exact "starting guess", assuming mu is fixed.
+        all_fixed_pars = {"mu": mu, "sigma_t": sigma_t} # mu is fixed in nuisance-parameter-only fits
         #print("In 'get_nuisance_tensorflow_variables'")
         #print("tf pars:", pars)
         #print("tf all_fixed_pars:", all_fixed_pars)
@@ -196,9 +195,9 @@ class NormalAnalysis(BaseAnalysis):
         #print("-2logL_x:", chi2_x + const_x)
         #print("-2logL_xt:", chi2_xt + const_xt)
         #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
-        return pars, all_fixed_pars
+        return free_pars, all_fixed_pars
 
-    def get_all_tensorflow_variables(self,sample_dict,fixed_pars):
+    def get_all_parameters(self,sample_dict,fixed_pars):
         """Get all parameters (signal and nuisance) to be optimized, for input to "tensorflow_model
            (initial guesses assume free 'mu' and 'theta')
            Note that "sigma_t" is an extra theory or control measurement uncertainty
@@ -212,15 +211,13 @@ class NormalAnalysis(BaseAnalysis):
         x_theta = sample_dict["x_theta"]
         mu_MLE = x - x_theta
         theta_MLE = x_theta
-        pars = {"mu": tf.Variable(mu_MLE, dtype=c.TFdtype, name='mu'),
-                "theta": tf.Variable(theta_MLE, dtype=c.TFdtype, name='theta')}
+        free_pars = {"mu": mu_MLE, "theta": theta_MLE} 
         if 'sigma_t' in fixed_pars.keys():
             sigma_t = fixed_pars['sigma_t']
         else:
             sigma_t = c.reallysmall # Default TODO: Cannot use exactly zero 
-        fixed_pars_out = {"sigma_t": tf.constant(sigma_t, dtype=c.TFdtype, name='sigma_t')}
-        #fixed_pars_out = {"sigma_t": tf.Variable(sigma_t, dtype=c.TFdtype, name='sigma_t')}
-        #print("tf pars:", pars)
+        fixed_pars_out = {"sigma_t": sigma_t}
+        #print("tf free_pars:", free_pars)
         #print("tf fixed_pars_out:", fixed_pars_out)
         #print("self.sigma:", self.sigma)
         chi2_x = (mu_MLE + theta_MLE - x)**2 / self.sigma**2
@@ -233,7 +230,7 @@ class NormalAnalysis(BaseAnalysis):
         #print("-2logL_x:", chi2_x + const_x)
         #print("-2logL_xt:", chi2_xt + const_xt)
         #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
-        return pars, fixed_pars_out
+        return free_pars, fixed_pars_out
 
 
 

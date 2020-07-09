@@ -145,6 +145,7 @@ def print_with_id(d,id_only=False):
     if d is not None:
       out = "{"
       for k,v in d.items():
+        print(v)
         out += "{0}: ".format(k)
         if isinstance(v, Mapping):
             out+="{0}".format(print_with_id(v,id_only))
@@ -156,3 +157,57 @@ def print_with_id(d,id_only=False):
     else:
         out = "None"
     return out
+
+def convert_to_TF_variables(d):
+   """Convert bottom-level entries of dictionary to TensorFlow 'Variable' objects, to be fed to
+      TensorFlow optimiser and gradient calculations"""
+   out = {}
+   #print("constant=",constant)
+   for k,val in d.items():
+       if isinstance(val,tf.Variable):
+           out[k] = val # Already a Variable, no need to convert
+           print(k, 'was tf.Variable, left alone:', val)
+       elif isinstance(val, Mapping):
+           out[k] = convert_to_TF_variables(val) # We must go deeper
+       else:
+           # Try to create tensorflow variable from this data
+           try:
+               out[k] = tf.Variable(val, dtype=TFdtype)
+               print(k, 'converted to Variable:', val)
+           except Exception as e:
+               msg = "Failed to convert values for key {0} to a TensorFlow Variable object! See associated exception for more information. Values were: {1}".format(k,val)
+               raise ValueError(msg) from e
+   return out
+
+def convert_to_TF_constants(d,ignore_variables=False):
+   """Convert bottom-level entries of dictionary to TensorFlow 'Tensor' objects
+      If ignore_variables is True then dictionary values that are TensorFlow
+      'Variable' objects will be left unchanged. Otherwise, their existence in
+      the input dictionary will cause an error to be raised.
+   """
+   out = {}
+   #print("constant=",constant)
+   for k,val in d.items():
+       if isinstance(val,tf.Variable):
+           if ignore_variables:
+               # No conversion
+               out[k] = val
+           else:
+               # Shouldn't be trying to convert Variables to constant tensors!
+               msg = "Attempted to convert dictionary entry with key '{0}' (which is a TensorFlow 'Variable' object) into a constant TensorFlow 'Tensor' object! This conversion is not allowed, please make sure that, for example, parameters returned from Analysis objects are not already Variable objects."
+               raise TypeError(msg)
+       elif isinstance(val,tf.Tensor):
+           out[k] = val
+           print(k, 'was already tf.Tensor, left alone:', val)  
+       elif isinstance(val, Mapping):
+           out[k] = convert_to_TF_constants(val,ignore_variables) # We must go deeper
+       else:
+           # Try to create tensorflow variable or constant from this data
+           try:
+               out[k] = tf.constant(val, dtype=TFdtype)
+               print(k, 'converted to tf.Tensor:', val)
+           except Exception as e:
+               msg = "Failed to convert values for key {0} to a TensorFlow Tensor object! See associated exception for more information. Values were: {1}".format(k,val)
+               raise ValueError(msg) from e
+   return out
+
