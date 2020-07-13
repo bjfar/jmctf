@@ -2,27 +2,27 @@
 
 import numpy as np
 
-def create_table(c,table_name,columns):
+def create_table(cursor,table_name,columns):
     """Create an SQLite table if it doesn't already exist"""
     command = "CREATE TABLE IF NOT EXISTS '{0}' ({1} {2}".format(table_name,columns[0][0],columns[0][1])
     for col, t in columns[1:]:
         command += ",{0} {1}".format(col,t)
     command += ")"  
     #print("command:",command)
-    c.execute(command)
+    cursor.execute(command)
 
-def add_columns(c,table_name,columns):
+def add_columns(cursor,table_name,columns):
     """Add columns to an SQLite table if they don't already exist"""
     # Check what columns currently exist
-    c.execute('PRAGMA table_info({0})'.format(table_name))
-    results = c.fetchall()
+    cursor.execute('PRAGMA table_info({0})'.format(table_name))
+    results = cursor.fetchall()
     existing_cols = [row[1] for row in results]
     # Have to add columns one at a time. Oh well, apparently should be fast anyway.
     commands = ["ALTER TABLE {0} ADD COLUMN {1} {2}".format(table_name,col,t) for col,t in columns if col not in existing_cols]
     for command in commands:
-       c.execute(command)
+       cursor.execute(command)
 
-def upsert(c,table_name,df,primary):
+def upsert(cursor,table_name,df,primary):
     """Insert or overwrite data into a set of SQL columns.
        Data assumed to be a pandas dataframe. Must specify
        which column contains the primary key.
@@ -46,9 +46,9 @@ def upsert(c,table_name,df,primary):
                 command += "{0}=excluded.{0}".format(col)
                 if j<len(columns)-1: command += ","
     #print("command:", command)
-    c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+    cursor.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
 
-def upsert_if_smaller(c,table_name,df,primary):
+def upsert_if_smaller(cursor,table_name,df,primary):
     """As sql_upsert, but only replaces existing data if new values are smaller than those already recorded.
     """
     rec = df.to_records()
@@ -73,9 +73,9 @@ def upsert_if_smaller(c,table_name,df,primary):
                 command += "      END"
                 if j<len(columns)-1: command += ","
     #print("command:", command)
-    c.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+    cursor.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
 
-def insert_as_arrays(c,table_name,df):
+def insert_as_arrays(cursor,table_name,df):
     """Do not treat Pandas rows as SQL rows; just dump each 
        column into one SQL entry as BLOB data"""
 
@@ -90,10 +90,10 @@ def insert_as_arrays(c,table_name,df):
             command += ",?"
     command += ")"
 
-    c.execute(command, df.to_numpy().T) # Storing entire dataframe column as one entry in an SQL row
+    cursor.execute(command, df.to_numpy().T) # Storing entire dataframe column as one entry in an SQL row
 
 
-def load(c,table_name,cols,keys=None,primary=None):
+def load(cursor,table_name,cols,keys=None,primary=None):
     """Load data from an sql table
        with simple selection of items by primary key values.
        Compressed primary key values into a set of ranges to
@@ -122,20 +122,20 @@ def load(c,table_name,cols,keys=None,primary=None):
             command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
             if i<len(ranges)-1: command += " OR "
     #print("command:", command)
-    c.execute(command)
-    return c.fetchall() 
+    cursor.execute(command)
+    return cursor.fetchall() 
 
-def table_info(c,table):
+def table_info(cursor,table):
     """Return table metadata"""
     command = "PRAGMA table_info({0})".format(table)
-    c.execute(command)
-    return c.fetchall()
+    cursor.execute(command)
+    return cursor.fetchall()
 
-def check_table_exists(c,table):
+def check_table_exists(cursor,table):
     """Check if a table exists in the database"""
     command = "SELECT name FROM sqlite_master WHERE type = 'table'"
-    c.execute(command)
-    results = c.fetchall()
+    cursor.execute(command)
+    results = cursor.fetchall()
     if table in [r[0] for r in results]: 
         return True
     else:

@@ -1,7 +1,7 @@
 """Testing LEEcorrector objects"""
 
-from JMCTF.LEE import collider_analyses_from_long_YAML, LEECorrectorMaster
-from JMCTF.common import deep_merge, CDFf
+from jmctf.LEE import collider_analyses_from_long_YAML, LEECorrectorMaster
+from jmctf.common import deep_merge, CDFf
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -39,7 +39,7 @@ def get_grid(analyses,N):
     start = []
     stop = []
     size = []
-    for a in analyses.values():
+    for a in analyses:
         b     = a.SR_b 
         b_sys = a.SR_b_sys
         size += [len(b)]
@@ -49,7 +49,7 @@ def get_grid(analyses,N):
     sgrid = ndim_grid(start,stop,N)
     signal = {}
     i = 0
-    for a,n in zip(analyses.values(),size):
+    for a,n in zip(analyses,size):
         signal[a.name] = {'s': tf.constant(sgrid[:,i:i+n],dtype=float)}
         i += n
     Ns = len(sgrid)
@@ -77,22 +77,31 @@ class SigGen:
         self.j += size
         return chunk, list(range(j,j+size))
 
-nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read.values()}
+nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read}
 DOF = 3
 
 # Specific signal whose local distributions and p-values we would like to know
 # This case is 'cherry-picked' to match the "observed" counts in every signal region of every analysis
-signal_test = {a.name: {'s': tf.constant([[n for n in a.SR_n]], dtype=float)} for a in analyses_read.values()}
+signal_test = {a.name: {'s': tf.constant([[n for n in a.SR_n]], dtype=float)} for a in analyses_read}
 
 path = 'TEST'
 master_name = 'all'
 nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
+
+# Make sure we are providing all the required signal hypothesis parameters
+free, fixed, nuis = lee.get_parameter_structure()
+print("free:", free)
+print("fixed:", fixed)
+print("nuis:", nuis)
+print("nosignal:", nosignal)
+        
 #lee.ensure_equal_events()
 #lee.add_events(int(1e3))
 lee.process_null()
 sig_name = "cherry_picked"
-#lee.process_signal_local(signal_test,name=sig_name)
+lee.process_signal_local(signal_test,name=sig_name)
+lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
 #lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
 #lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 

@@ -17,7 +17,7 @@ import codecs
 import h5py
 from progress.bar import Bar
 from . import sql_helpers as sql
-from . import common as com
+from . import common as c
 from .binned_analysis import BinnedAnalysis
 from .joint import JointDistribution
 
@@ -27,14 +27,12 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
        
        Also computes local p-values for all input signal hypotheses.
     """
-    nullnuis = {a.name: {'nuisance': None} for a in analyses.values()} # Use to automatically set nuisance parameters to zero for sample generation
-
     print("Simulating {0}".format(name))
     
     # Create joint distributions
     joint   = JointDistribution(analyses) # Version for fitting (object is left with fitted parameters upon fitting)
-    joint0  = JointDistribution(analyses,com.deep_merge(nosignal,nullnuis))
-    joint0s = JointDistribution(analyses,com.deep_merge(signal,nullnuis))
+    joint0  = JointDistribution(analyses,nosignal)
+    joint0s = JointDistribution(analyses,signal)
     
     # Get Asimov samples for nuisance MLEs with fixed signal hypotheses
     samplesAb = joint0.Asamples
@@ -51,8 +49,8 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
     # Fit distributions for Asimov datasets for the other half of each
     # likelihood ratio
     print("Fitting w.r.t Asimov samples")
-    qbAsb, joint_fitted, pars = joint.fit_nuisance(nosignal, samplesAsb,log_tag='bAsb')
-    qsbAb, joint_fitted, pars = joint.fit_nuisance(signal, samplesAb,log_tag='sbAsb')
+    qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, nosignal, log_tag='bAsb')
+    qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, signal, log_tag='sbAsb')
   
     qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
     qAb = (qsbAb - qbAb)[0]
@@ -71,13 +69,13 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
         #qgof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
 
         print("Fitting w.r.t background-only samples")
-        qb , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
-        qsb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(signal, samples0, log_tag='qsb')
+        qb , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
+        qsb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(samples0, signal, log_tag='qsb')
         q = qsb - qb # mu=0 distribution
     else:
         # Only need the no-signal nuisance parameter fits for quadratic approximations
         print("Fitting no-signal nuisance parameters w.r.t background-only samples")
-        qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(nosignal, samples0, log_tag='qb')
+        qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
 
         # Do one full GOF fit just to determine parameter numbers 
         null, null, gof_pars_b  = joint.fit_all(onesample0)
@@ -121,8 +119,8 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
     q_quad = qsb_quad - qb # Using quad approx only for signal half. Biased, but maybe better p-value behaviour.
 
     # print("Fitting w.r.t signal samples")
-    # qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(nosignal, samples0s)
-    # qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(signal, samples0s)
+    # qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, nosignal)
+    # qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, signal)
     # q_s = qsb_s - qb_s #mu=1 distribution
 
     print("Determining all local p-value distributions...")
@@ -188,8 +186,8 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
 
     # Fit distributions for observed datasets
     print("Fitting w.r.t observed data")
-    qbO , joint_fitted, pars = joint.fit_nuisance(nosignal, obs_data)
-    qsbO, joint_fitted, pars = joint.fit_nuisance(signal, obs_data)
+    qbO , joint_fitted, pars = joint.fit_nuisance(obs_data, nosignal)
+    qsbO, joint_fitted, pars = joint.fit_nuisance(obs_data, signal)
     qO = (qsbO - qbO)[0] # extract single sample result
 
     print("Fitting GOF w.r.t observed data")
@@ -300,9 +298,9 @@ class LEECorrectorBase:
     def _load_results(self,table,columns,keys=None,primary='EventID',from_observed=False):
         if from_observed==True: table += "_observed"
         conn = self.connect_to_db()
-        c = conn.cursor()
-        results = sql.load(c,table,columns,keys,primary)
-        info = sql.table_info(c,table)
+        cur = conn.cursor()
+        results = sql.load(cur,table,columns,keys,primary)
+        info = sql.table_info(cur,table)
 
         # Figure out types to use for the requested columns
         #info: [(0, 'EventID', 'integer', 0, None, 1), (1, 'neg2logL_null', 'real', 0, None, 0), (2, 'neg2logL_profiled', 'real', 0, None, 0), (3, 'neg2logL_profiled_quad', 'real', 0, None, 0)]
@@ -346,11 +344,12 @@ class LEECorrectorMaster(LEECorrectorBase):
         self.profiled_table = 'profiled' # For combined results profiled over all signal hypotheses
         self.nullname = 'null' # For combined results for null hypothesis
         self.local_table = 'local_' # Base name for tables related to specific signal hypotheses whose local properties we want to investigate
-        for name,a in analyses.items():
-            self.LEEanalyses[name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]},nullname)
+        self.analyses = analyses # For introspection only. Otherwise LEECorrectorAnalysis interface is used
+        for a in self.analyses:
+            self.LEEanalyses[a.name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]},nullname)
 
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
 
         # Table for recording final profiled (i.e. best-fit) test statistic results
         comb_cols = [ ("EventID", "integer primary key")
@@ -359,10 +358,18 @@ class LEECorrectorMaster(LEECorrectorBase):
                      ,("logw", "real")]
         colnames = [x[0] for x in comb_cols]
 
-        sql.create_table(c,self.profiled_table,comb_cols)
-        sql.create_table(c,self.profiled_table+"_observed",comb_cols[:-1]) # Don't want the logw column for this
+        sql.create_table(cur,self.profiled_table,comb_cols)
+        sql.create_table(cur,self.profiled_table+"_observed",comb_cols[:-1]) # Don't want the logw column for this
         self.close_db(conn)
-  
+ 
+    def get_parameter_structure(self):
+        """Introspect the parameters for the joint distribution of all analyses.
+           For helping understand what null hypotheses parameters are required as
+           input.
+        """
+        # JointDistribution already has a method for doing this
+        return JointDistribution(self.analyses).get_parameter_structure()
+
     def add_events(self,N,bias=0):
         """Generate pseudodata for all analyses under the null signal hypothesis"""
         logw = tf.zeros((N,1))
@@ -375,10 +382,10 @@ class LEECorrectorMaster(LEECorrectorBase):
         """Record existence of events in the profiled table"""
         # Do this by just inserting null data and letting the EventID column auto-increment
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
         command = "INSERT INTO {0} (neg2logL,logw) VALUES (?,?)".format(self.profiled_table)
         vals = [(None,logwi[0]) for logwi in logw.numpy().tolist()]
-        c.executemany(command,  vals) 
+        cur.executemany(command,  vals) 
         self.close_db(conn)
 
     def process_null(self):
@@ -407,11 +414,11 @@ class LEECorrectorMaster(LEECorrectorBase):
             else:
                 comb += df
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
         if signal is None: table = self.local_table+self.nullname
         else: table = self.local_table+name
-        sql.create_table(c,table,[('EventID','integer primary key'),('neg2logL','real')])
-        sql.upsert(c,table,comb,'EventID')
+        sql.create_table(cur,table,[('EventID','integer primary key'),('neg2logL','real')])
+        sql.upsert(cur,table,comb,'EventID')
         self.close_db(conn)
 
         # Do the same for asymptotic/Asimov and observed values (non-null case only)
@@ -427,10 +434,10 @@ class LEECorrectorMaster(LEECorrectorBase):
                     comb += df
             comb.index.rename('EventID',inplace=True)
             conn = self.connect_to_db()
-            c = conn.cursor()
+            cur = conn.cursor()
             col_info = [('EventID','integer primary key')]+[(col,'real') for col in cols]
-            sql.create_table(c,self.local_table+name+'_observed',col_info)
-            sql.upsert(c,self.local_table+name+'_observed',comb,primary='EventID')
+            sql.create_table(cur,self.local_table+name+'_observed',col_info)
+            sql.upsert(cur,self.local_table+name+'_observed',comb,primary='EventID')
             self.close_db(conn)
         else:
             # Else just add the observed value for the null hypothesis likelihood
@@ -445,10 +452,10 @@ class LEECorrectorMaster(LEECorrectorBase):
                     comb += df
             comb.index.rename('EventID',inplace=True)
             conn = self.connect_to_db()
-            c = conn.cursor()
+            cur = conn.cursor()
             col_info = [('EventID','integer primary key')]+[(col,'real') for col in cols]
-            sql.create_table(c,self.local_table+self.nullname+'_observed',col_info)
-            sql.upsert(c,self.local_table+self.nullname+'_observed',comb,primary='EventID')
+            sql.create_table(cur,self.local_table+self.nullname+'_observed',col_info)
+            sql.upsert(cur,self.local_table+self.nullname+'_observed',comb,primary='EventID')
             self.close_db(conn)
 
 
@@ -466,7 +473,8 @@ class LEECorrectorMaster(LEECorrectorBase):
             pars = a.load_bg_nuis_pars(EventIDs)
             if pars is None:
                 raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all background fits been done?")
-            events = a.load_events(EventIDs)
+            events = c.add_prefix(name,a.load_events(EventIDs))
+            print("loaded events:", events)
             quads += [a.compute_quad(pars,events)]
         Ns = signal_gen.count
         Nchunk = signal_gen.chunk_size
@@ -519,8 +527,8 @@ class LEECorrectorMaster(LEECorrectorBase):
         data.index.name = 'EventID' 
  
         conn = self.connect_to_db()
-        c = conn.cursor()
-        sql.upsert_if_smaller(c,self.profiled_table+"_observed",data,'EventID') # Only replace existing values if new ones are smaller
+        cur = conn.cursor()
+        sql.upsert_if_smaller(cur,self.profiled_table+"_observed",data,'EventID') # Only replace existing values if new ones are smaller
         self.close_db(conn)
 
 
@@ -554,8 +562,8 @@ class LEECorrectorMaster(LEECorrectorBase):
                 data.index.name = 'EventID' 
  
                 conn = self.connect_to_db()
-                c = conn.cursor()
-                sql.upsert_if_smaller(c,self.profiled_table,data,'EventID') # Only replace existing values if new ones are smaller
+                cur = conn.cursor()
+                sql.upsert_if_smaller(cur,self.profiled_table,data,'EventID') # Only replace existing values if new ones are smaller
                 self.close_db(conn)
 
                 batchi+=1
@@ -625,12 +633,12 @@ class LEECorrectorMaster(LEECorrectorBase):
         """Loads eventIDs from database where 'condition' is true in 'reftable'
            To skip rows, set 'offset' to the first row to be considered."""
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
 
         if reftable is not None:
             # First see if any data is in the reference table yet:
-            c.execute("SELECT Count(EventID) FROM "+reftable)
-            results = c.fetchall()
+            cur.execute("SELECT Count(EventID) FROM "+reftable)
+            results = cur.fetchall()
             nrows = results[0][0]
 
         command = "SELECT A.EventID from {0} as A".format(self.profiled_table)        
@@ -643,8 +651,8 @@ class LEECorrectorMaster(LEECorrectorBase):
                           B.{1} 
                       """.format(reftable,condition)
         command += " LIMIT {0} OFFSET {1}".format(N,offset)
-        c.execute(command)
-        results = c.fetchall()
+        cur.execute(command)
+        results = cur.fetchall()
         self.close_db(conn) 
 
         if len(results)>0:
@@ -660,9 +668,9 @@ class LEECorrectorMaster(LEECorrectorBase):
            Should be equal to max(EventID)+1 since we
            don't ever delete events."""
         conn = self.connect_to_db()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM {0}".format(self.profiled_table))
-        results = c.fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM {0}".format(self.profiled_table))
+        results = cur.fetchall()
         self.close_db(conn) 
         return results[0][0]
 
@@ -724,10 +732,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
         self.full_table_quad = 'all_signals_quad' # Table of profile likelihood (quadratic approximation) values for all events *and* all signals. Only generated on request due to possibly huge size.
         self.analysis = analysis
-        self.analyses = {self.analysis.name: self.analysis} # For functions that expect a dictionary of analyses
         self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis
-        self.nullnuis = {self.analysis.name: {'nuisance': None}} # Use to automatically set nuisance parameters to zero for sample generation
-        self.joint = JointDistribution(self.analyses)
+        self.joint = JointDistribution([self.analysis])
         conn = self.connect_to_db()
 
         # Columns for pseudodata table
@@ -737,18 +743,18 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         #print("columns:", self.event_columns)
 
-        c = conn.cursor()
+        cur = conn.cursor()
         cols = [("EventID", "integer primary key"),("logw", "real")]
         cols += [(col, "real") for col in self.event_columns[1:]]
         event_colnames = [x[0] for x in cols]
-        sql.create_table(c,self.event_table,cols) 
-        self.check_table(c,self.event_table,event_colnames)
+        sql.create_table(cur,self.event_table,cols) 
+        self.check_table(cur,self.event_table,event_colnames)
         self.close_db(conn)
        
-    def check_table(self,c,table,required_cols):
+    def check_table(self,cursor,table,required_cols):
         # Print the columns already existing in our table
-        c.execute('PRAGMA table_info({0})'.format(table))
-        results = c.fetchall()
+        cursor.execute('PRAGMA table_info({0})'.format(table))
+        results = cursor.fetchall()
         existing_cols = [row[1] for row in results]
 
         # Check if they match the required columns
@@ -762,7 +768,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            importance sampling. Make sure to then consider the event weights in final results!"""
         #print("Recording {0} new events...".format(N))
         start = time.time()
-        joint = JointDistribution(self.analyses,com.deep_merge(self.nullsignal,self.nullnuis))
+        joint = JointDistribution([self.analysis],self.nullsignal)
 
         # Generate pseudodata
         if bias>0:
@@ -773,7 +779,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         # Save events to database
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
    
         structure = self.analysis.get_sample_structure() 
         
@@ -794,7 +800,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
          
         datatable = tf.concat(datalist,axis=-1).numpy()
 
-        c.executemany(command,  map(tuple, datatable.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
+        cur.executemany(command,  map(tuple, datatable.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
         self.close_db(conn)
         end = time.time()
         #print("Took {0} seconds".format(end-start))
@@ -805,15 +811,15 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            To skip rows, set 'offset' to the first row to be considered."""
         structure = self.analysis.get_sample_structure() 
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
 
         # First see if reference table even exists yes
-        if not sql.check_table_exists(c,reftable):
+        if not sql.check_table_exists(cur,reftable):
             condition = None # Ignore conditions if reference table doesn't exist yet. Cannot possible match on them.
         else:
             # See if any data is in the reference table yet:
-            c.execute("SELECT Count(EventID) FROM "+reftable)
-            results = c.fetchall()
+            cur.execute("SELECT Count(EventID) FROM "+reftable)
+            results = cur.fetchall()
             nrows = results[0][0]
             if nrows == 0:
                 # No data; so nothing to match on
@@ -834,14 +840,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                           B.{1} 
                       """.format(reftable,condition)
         command += " LIMIT {0} OFFSET {1}".format(N,offset)
-        c.execute(command)
-        results = c.fetchall()
+        cur.execute(command)
+        results = cur.fetchall()
         self.close_db(conn) 
 
         if len(results)>0:
             # Convert back into dictionary of tensorflow tensors
             # Start by converting to one big tensor
-            alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+            alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
  
             EventIDs = tf.cast(tf.round(alldata[:,0]),dtype=tf.int32) # TODO: is this safe?
             i = 1;
@@ -862,9 +868,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            Should be equal to max(EventID)+1 since we
            don't ever delete events."""
         conn = self.connect_to_db()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM {0}".format(self.event_table))
-        results = c.fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM {0}".format(self.event_table))
+        results = cur.fetchall()
         self.close_db(conn) 
         return results[0][0]
 
@@ -881,20 +887,20 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                     cols += ["{0}_{1}".format(name,j)]
 
             conn = self.connect_to_db()
-            c = conn.cursor()
-            results = sql.load(c,'events',cols,EventIDs,'EventID')
+            cur = conn.cursor()
+            results = sql.load(cur,'events',cols,EventIDs,'EventID')
             self.close_db(conn) 
 
             if len(results)>0:
                 # Convert back into dictionary of tensorflow tensors
                 # Start by converting to one big tensor
-                alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+                alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
                 i = 0;
                 events = {}
                 for name, size in structure.items():
                     subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
                     i+=size
-                    events[self.analysis.name+"::"+name] = subevents
+                    events[name] = subevents
             else:
                 events = None
         return events
@@ -914,18 +920,18 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 cols += ["{0}_{1}".format(par,i)]
 
         conn = self.connect_to_db()
-        c = conn.cursor()
+        cur = conn.cursor()
         if observed_mode:
-            results = sql.load(c,self.local_table+self.nullname+"_observed",cols,[0],'EventID')
+            results = sql.load(cur,self.local_table+self.nullname+"_observed",cols,[0],'EventID')
         else:
-            results = sql.load(c,self.local_table+self.nullname,cols,EventIDs,'EventID')
+            results = sql.load(cur,self.local_table+self.nullname,cols,EventIDs,'EventID')
         self.close_db(conn) 
 
         # Convert back to dict of tensors
         if len(results)>0:
             # Convert back into dictionary of tensorflow tensors
             # Start by converting to one big tensor
-            alldata = tf.convert_to_tensor(results, dtype=tf.float32)
+            alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
             i = 0
             pars = {}
             for par,size in nuis_structure.items():
@@ -935,14 +941,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             nuis_pars = None
         return nuis_pars
- 
+
     def fit_signal_batch(self,events,signals,signalIDs=None,record_all=True):
         """Compute signal fits for selected eventIDs
            Returns test statistic values for combination
            with other analyses. 
         """
         # Run full numerical fits of nuisance parameters for all signal hypotheses
-        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(signals, events, log_tag='qsb')
+        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(events, signals, log_tag='qsb')
 
         return qsb
 
@@ -950,7 +956,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         """Compute quadratic approximations of profile likelihood for the specified
            set of events, expanding around the supplied nuisance parameter point with
            the null signal"""
-        joint_fitted_b = JointDistribution(self.analyses,com.deep_merge(self.nullsignal,pars))
+        joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.nullsignal,pars))
         quadf = joint_fitted_b.quad_loglike_f(events)
 
         return quadf 
@@ -982,7 +988,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 f = h5py.File(fname,'a') # Create if doesn't exist, otherwise read/write
             elif dbtype is 'sqlite':
                 conn = self.connect_to_db()
-                c = conn.cursor()
+                cur = conn.cursor()
             else:
                 raise ValueError("Unrecognised database type selected!")
 
@@ -1018,14 +1024,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      # col_names = [x[0] for x in columns]
   
                      # this_table = self.full_table_quad+"_batch_{0}".format(i)
-                     # sql.create_table(c,this_table,[('SignalID',"integer primary key")]+columns)
+                     # sql.create_table(cur,this_table,[('SignalID',"integer primary key")]+columns)
                      # # If table already existed then we may have to add new event columns
-                     # sql.add_columns(c,this_table,columns)
+                     # sql.add_columns(cur,this_table,columns)
 
                      # # Add likelihoods to output record.
                      # data = pd.DataFrame(neg2logL_batch.numpy().T,index=signalIDs,columns=col_names)
                      # data.index.name = 'SignalID' 
-                     # sql.upsert(c,this_table,data,primary='SignalID')
+                     # sql.upsert(cur,this_table,data,primary='SignalID')
 
                      #====== Version 2 ======
                      # Ok it is very slow to retrieve these giant tables with separately stored entries.
@@ -1059,11 +1065,11 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                                  f.create_dataset(col, data=np.array(data[col]), chunks=(1000,), maxshape=(None,))      
 
                      elif dbtype is 'sqlite':
-                         sql.create_table(c,this_table,columns)
+                         sql.create_table(cur,this_table,columns)
 
                          # If table already existed then we may have to add new event columns
-                         sql.add_columns(c,this_table,columns)
-                         sql.insert_as_arrays(c,this_table,data)
+                         sql.add_columns(cur,this_table,columns)
+                         sql.insert_as_arrays(cur,this_table,data)
 
             if dbtype is 'hdf5':
                  f.close()
@@ -1088,7 +1094,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             f = h5py.File('{0}.hdf5'.format(self.db),'a') # Create if doesn't exist, otherwise read/write
         elif dbtype is 'sqlite':
             conn = self.connect_to_db()
-            c = conn.cursor()
+            cur = conn.cursor()
         else:
             raise ValueError("Unrecognised database type selected!")
 
@@ -1104,16 +1110,16 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             # First inspect full tables to see what the maximum EventID is, so we know what indices to
             # sample from. Assume the set of events is complete up to that maximum number.
             conn = self.connect_to_db()
-            c = conn.cursor()
-            c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-            results = c.fetchall() 
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            results = cur.fetchall() 
             full_table_batches = [int(row[0].split("_batch_")[1]) for row in results if row[0].startswith(self.full_table_quad)] 
             max_batch = max(full_table_batches)
             max_batch_table = self.full_table_quad+"_batch_{0}".format(max_batch)
 
             # Inspect the highest batch and find the maximum EventID (column) in it
-            c.execute('PRAGMA table_info({0})'.format(max_batch_table))
-            results = c.fetchall()
+            cur.execute('PRAGMA table_info({0})'.format(max_batch_table))
+            results = cur.fetchall()
             EventIDs = [int(row[1].split("E_")[1]) for row in results if row[1].startswith("E_")]
             maxEventID = max(EventIDs)
 
@@ -1129,6 +1135,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 maxE = min([maxE,maxEventID])
                 bootstrap_EventIDs = np.arange(minE,maxE+1,dtype=int)
         else:
+            print("maxEventID:", maxEventID)
+            print("N:", N)
             bootstrap_EventIDs = np.random.randint(1,maxEventID,N)
         
         # Sort into ascending order and group according to the batches in which they can be found
@@ -1147,8 +1155,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                     command = "SELECT "+", ".join(["E_{0}".format(ID) for ID in these_eventIDs])
                     command += " FROM {0}".format(self.full_table_quad+"_batch_{0}".format(i))
                     #print("command:", command)
-                    c.execute(command)
-                    results = c.fetchall()
+                    cur.execute(command)
+                    results = cur.fetchall()
                     these_events = []
                     for row in results:
                         these_events += [tf.stack(row,axis=1)] # Join each row of results along events direction 
@@ -1197,7 +1205,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             null_case = False
 
-        joint = JointDistribution(self.analyses)
+        joint = JointDistribution([self.analysis])
 
         batch_size = 10000
         continue_processing = True
@@ -1210,13 +1218,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 continue_processing = False
             if continue_processing:
                 #print("Fitting w.r.t background-only samples")
-                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(signal, events, log_tag='q_'+name)
+                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, signal, log_tag='q_'+name)
                 #print("nuis_pars_b:", nuis_pars_b)
                 # Write events to output database               
                 # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
                 arrays = [qb]
                 cols = ["neg2logL"]
-                for par, arr in nuis_pars_b[self.analysis.name].items():
+                fitted_pars_b = nuis_pars_b["fitted"]
+                for par, arr in fitted_pars_b[self.analysis.name].items():
                     for i in range(arr.shape[-1]):
                         cols += ["{0}_{1}".format(par,i)]
                     arrays += [tf.squeeze(arr,axis=1)] # remove 'signal' dimension
@@ -1224,10 +1233,10 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
                 data.index.name = 'EventID' 
                 conn = self.connect_to_db()
-                c = conn.cursor()
+                cur = conn.cursor()
                 col_info = [('EventID','integer primary key')] + [(col,'real') for col in cols]
-                sql.create_table(c,self.local_table+name,col_info)
-                sql.upsert(c,self.local_table+name,data,primary='EventID')
+                sql.create_table(cur,self.local_table+name,col_info)
+                sql.upsert(cur,self.local_table+name,data,primary='EventID')
                 self.close_db(conn)
             bar.next()
         bar.finish()
@@ -1235,10 +1244,11 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if null_case:
             Osamples = joint.Osamples
             # Also record results for fit to observed data
-            qbO, joint_fitted, pars = joint.fit_nuisance(self.nullsignal, Osamples) 
+            qbO, joint_fitted, pars = joint.fit_nuisance(Osamples, self.nullsignal) 
             arrays = [qbO]
             cols = ['neg2logL']
-            for par, arr in pars[self.analysis.name].items():
+            fitted_pars = pars["fitted"]
+            for par, arr in fitted_pars[self.analysis.name].items():
                 for i in range(arr.shape[-1]):
                     cols += ["{0}_{1}".format(par,i)]
                 arrays += [tf.squeeze(arr,axis=1)] # remove 'signal' dimension 
@@ -1246,16 +1256,16 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             data = pd.DataFrame(allpars.numpy(),columns=cols)
             data.index.rename('EventID',inplace=True) 
             conn = self.connect_to_db()
-            c = conn.cursor()
+            cur = conn.cursor()
             col_info = [('EventID','integer primary key')] + [(col,'real') for col in cols]
-            sql.create_table(c,self.local_table+name+"_observed",col_info)
-            sql.upsert(c,self.local_table+name+"_observed",data,primary='EventID')
+            sql.create_table(cur,self.local_table+name+"_observed",col_info)
+            sql.upsert(cur,self.local_table+name+"_observed",data,primary='EventID')
             self.close_db(conn)
 
         else:
             # If this isn't the null case, then should also compute the various Asimov likelihoods for this signal, for asymptotic results
-            joint0s = JointDistribution(self.analyses,com.deep_merge(signal,self.nullnuis))
-            joint0  = JointDistribution(self.analyses,com.deep_merge(self.nullsignal,self.nullnuis))
+            joint0s = JointDistribution([self.analysis],signal)
+            joint0  = JointDistribution([self.analysis],self.nullsignal)
  
             # Get Asimov samples for nuisance MLEs with fixed signal hypotheses
             samplesAsb = joint0s.Asamples 
@@ -1269,16 +1279,16 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             
             # Fit distributions for Asimov datasets for the other half of each
             # likelihood ratio
-            qbAsb, joint_fitted, pars = joint.fit_nuisance(self.nullsignal, samplesAsb,log_tag='bAsb')
-            qsbAb, joint_fitted, pars = joint.fit_nuisance(signal, samplesAb,log_tag='sbAsb')
+            qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, self.nullsignal,log_tag='bAsb')
+            qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, signal,log_tag='sbAsb')
 
             qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
             qAb = (qsbAb - qbAb)[0]
  
             # ...and fit the observed data too!
             Osamples = joint.Osamples
-            qbO , joint_fitted, pars = joint.fit_nuisance(self.nullsignal, Osamples)
-            qsbO, joint_fitted, pars = joint.fit_nuisance(signal, Osamples)
+            qbO , joint_fitted, pars = joint.fit_nuisance(Osamples, self.nullsignal)
+            qsbO, joint_fitted, pars = joint.fit_nuisance(Osamples, signal)
             qO = (qsbO - qbO)[0] # extract single sample result
 
             # Record everything!
@@ -1288,10 +1298,10 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             data.index.rename('EventID',inplace=True)
             #print("data:",data)
             conn = self.connect_to_db()
-            c = conn.cursor()
+            cur = conn.cursor()
             col_info = [('EventID','integer primary key')]+[(col,'real') for col in cols]
-            sql.create_table(c,self.local_table+name+'_observed',col_info)
-            sql.upsert(c,self.local_table+name+'_observed',data,primary='EventID')
+            sql.create_table(cur,self.local_table+name+'_observed',col_info)
+            sql.upsert(cur,self.local_table+name+'_observed',data,primary='EventID')
             self.close_db(conn)
 
 
@@ -1300,7 +1310,7 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
     #print("Loading YAML")
     d = yaml.safe_load(yamlfile)
     #print("YAML loaded")
-    analyses = {}
+    analyses = []
     SR_name_translation = {}
     inverse_translation = {}
     nextID=0
@@ -1321,7 +1331,7 @@ def collider_analyses_from_long_YAML(yamlfile,replace_SR_names=False):
             cov_order = None
         ucz = v["unlisted_corr_zero"]
         a = BinnedAnalysis(k,srs,cov,cov_order,ucz)
-        analyses[a.name] = a
+        analyses += [a]
     if replace_SR_names:
         return analyses, SR_name_translation, inverse_translation
     else:

@@ -282,12 +282,23 @@ class JointDistribution(tfd.JointDistributionNamed):
             descaled_pars[a.name] = a.descale_pars(pars[a.name])
         return descaled_pars
 
+    def scale_pars(self,pars):
+        """Apply scaling to all parameters. Assume none of them have had scaling applied yet."""
+        scaled_pars = {}
+        for a in self.analyses.values():
+          if a.name in pars.keys():
+            scaled_pars[a.name] = a.scale_pars(pars[a.name])
+        return scaled_pars
+
     def get_nuis_parameters(self,samples,fixed_pars):
         """Samples vector and signal provided to compute good starting guesses for parameters
            (in scaled parameter space)"""
         pars = {}
         all_fixed_pars = {}
         for a in self.analyses.values():
+            if a.name not in fixed_pars:
+                msg = "No fixed parameters supplied for analysis {0} during nuisance parameter fit! To fit only the nuisance parameters, fixed values for all non-nuisance parameters need to be provided".format(a.name)
+                raise ValueError(msg)
             p, fp = a.get_nuisance_parameters(self.get_samples_for(a.name,samples),fixed_pars[a.name])                         # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
             pars[a.name] = a.scale_pars(p)
             all_fixed_pars[a.name] = a.scale_pars(fp)
@@ -457,13 +468,34 @@ class JointDistribution(tfd.JointDistributionNamed):
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
         catted_pars = self.cat_pars(pars)
-        #print("catted_pats:", catted_pars)
+        ## with tf.GradientTape(persistent=True) as tape:
+        ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
+        ##     print("inpars:", inpars)
+        ##     # Due to a quirk of the JointDistribution constructor, 
+        ##     # we need to scale the parameters first. This is so we
+        ##     # can set "pre_scaled_pars=True", which will ensure that
+        ##     # parameters don't get copied to new objects, which would
+        ##     # break the TF graph connections.
+        ##     scaled_inpars = self.scale_pars(inpars)
+        ##     print("scaled_inpars:", scaled_inpars)
+        ##     print("self.analyses.values():", self.analyses.values())
+        ##     joint = JointDistribution(self.analyses.values(),scaled_inpars,pre_scaled_pars=True)
+        ##     q = -2*joint.log_prob(samples)
+        ##     print("q:", q)
+        ##     grads = tape.gradient(q, catted_pars)
         with tf.GradientTape(persistent=True) as tape:
+            # Don't need to go via JointDistribution, can just
+            # get log_prob for all component dists "manually"
+            # Avoids confusion about parameters getting copied and
+            # breaking TF graph connections etc.
             inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
-            joint = JointDistribution(self.analyses.values(),inpars)
-            q = -2*joint.log_prob(samples)
+            scaled_inpars = self.scale_pars(inpars)
+            q = 0
+            for a in self.analyses.values():
+                d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
+                for dist_name, dist in d.items():
+                    q += -2*dist.log_prob(samples[dist_name])
             grads = tape.gradient(q, catted_pars)
-        #print("grads:", grads)
         hessians = tape.batch_jacobian(grads, catted_pars) # batch_jacobian takes first (the sample) dimensions as independent for much better efficiency
         #print("H:",hessians)
         # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses. TODO: throw better error if dimension sizes not 1
