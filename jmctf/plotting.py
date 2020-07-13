@@ -1,7 +1,10 @@
 """Routines to help plot useful things in JMCTF"""
 
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tensorflow as tf
+from tensorflow_probability import distributions as tfd
 
 def plot_sample_dist(samples,ax_dict=None,**kwargs):
     # Restructure sample dictionary so it is split into analyses
@@ -54,3 +57,10 @@ def plot_collection(data,ax_dict=None,**kwargs):
     else:
         return
 
+def plot_chi2(ax,LLR,DOF,yscale="log",c='b'):
+    ax.set_xlabel("LLR")
+    ax.set(yscale=yscale)
+    sns.distplot(LLR, color=c, kde=False, ax=ax, norm_hist=True, label="JMCTF")
+    q = np.linspace(0, np.max(LLR),1000)
+    chi2 = tf.math.exp(tfd.Chi2(df=DOF).log_prob(q))
+    ax.plot(q,chi2,color=c,lw=2,label="chi^2 (DOF={0})".format(DOF))

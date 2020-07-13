@@ -4,7 +4,7 @@
 
 import numpy as np
 import tensorflow as tf
-from JMCTF import NormalAnalysis, BinnedAnalysis, JointDistribution
+from jmctf import NormalAnalysis, BinnedAnalysis, JointDistribution
 
 verb = True
 
@@ -136,7 +136,7 @@ print("all_pars_null (1e6):", to_numpy(par_dicts_null["all"]))
 print("all_pars_nuis (1e6)    :", to_numpy(par_dicts_nuis["all"]))
 
 import matplotlib.pyplot as plt
-from JMCTF.plotting import plot_sample_dist, plot_MLE_dist
+from jmctf.plotting import plot_sample_dist, plot_MLE_dist, plot_chi2
 fig, ax_dict = plot_sample_dist(samples)
 #plt.show()
 fig.tight_layout()
@@ -147,7 +147,7 @@ plot_MLE_dist(par_dicts_nuis["fitted"],ax_dict) # Overlay nuis MLE dists onto fu
 fig.tight_layout()
 fig.savefig("quickstart_MLE_dists.svg")
 
-#from JMCTF.plotting import plot_MLE_dist
+#from jmctf.plotting import plot_MLE_dist
 #q_null, joint_fitted_null, all_pars_null = joint_null.fit_all(samples)
 #print(all_pars_null)
 #fig = plot_MLE_dist(all_pars_null)
@@ -156,6 +156,7 @@ fig.savefig("quickstart_MLE_dists.svg")
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from jmctf.plotting import plot_sample_dist, plot_MLE_dist
 from tensorflow_probability import distributions as tfd
 fig = plt.figure(figsize=(5,3))
 ax = fig.add_subplot(111)
@@ -168,3 +169,11 @@ ax.plot(q,chi2,color='b',lw=2,label="chi^2 (DOF={0})".format(DOF))
 ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
 fig.tight_layout()
 fig.savefig("quickstart_LLR.svg")
+
+# Or using helper tools:
+fig = plt.figure(figsize=(5,3))
+ax = fig.add_subplot(111)
+plot_chi2(ax,LLR,DOF) 
+ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+fig.tight_layout()
+fig.savefig("quickstart_plot_LLR.svg")

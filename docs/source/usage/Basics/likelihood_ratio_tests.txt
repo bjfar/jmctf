@@ -2,6 +2,8 @@
 
 Find MLEs and conduct simple likelihood ratio tests
 ========================================================
+Likelihood ratio tests
+----------------------
 
 In the previous section (:ref:`sample_from_joint_long`) we learned how to sample from a given :py:class:`.JointDistribution` under a fixed set of null hypothesis parameter values, and how to fit all the free and nuisance parameters for that joint distribution to the simulated data. Now, we investigate the results of those fits and use them to construct likelihood ratio test statistics.
 
@@ -10,7 +12,7 @@ Recall that we had the following fit results::
     >>> q_full, joint_fitted_full, par_dicts_full = joint.fit_all(samples,null)
     >>> q_nuis, joint_fitted_nuis, par_dicts_nuis = joint.fit_nuisance(samples, null)
 
-Here, `par_dicts_full` and `par_dicts_nuis` contain the free and nuisance, and nuisance-only, parameters fitted to the same set of `samples`, with non-nuisance free parameters set to null hypothesis values in the latter case. By `fitted` I mean that we have obtained maximum likelihood estimators (MLEs) for those parameters under the simulated samples. I will not explain the full theory of likelihood ratio tests here --- for a basic overview the `wikipedia page <https://en.wikipedia.org/wiki/Likelihood-ratio_test>`_ is not bad --- but the reason we have done these particular fits is because the combination `q_nuis - q_full` corresponds to a standard type of likelihood ratio test statistic and asymptotically follows a chi-squared distribution (when the free parameters in the nuisance-only fit are set to the values used to simulate the samples, i.e. their "true" values). This can be demonstrated with a simple plot::
+Here, `par_dicts_full` and `par_dicts_nuis` contain the free and nuisance, and nuisance-only, parameters fitted to the same set of `samples`, with non-nuisance free parameters set to null hypothesis values in the latter case. By `fitted` I mean that we have obtained maximum likelihood estimators (MLEs) for those parameters under the simulated samples. I will not explain the full theory of likelihood ratio tests here --- for a basic overview the `wikipedia page <https://en.wikipedia.org/wiki/Likelihood-ratio_test>`_ is not bad --- but the reason we have done these particular fits is because the combination `q_nuis - q_full` corresponds to a standard type of profile likelihood ratio test statistic and asymptotically follows a chi-squared distribution (when the free parameters in the nuisance-only fit are set to the values used to simulate the samples, i.e. their "true" values). This can be demonstrated with a simple plot::
 
     LLR = q_nuis - q_full # -2*log( L_nuis / L_full )
     DOF = 3   
@@ -31,5 +33,43 @@ Here, `par_dicts_full` and `par_dicts_nuis` contain the free and nuisance, and n
     plt.show()
 
 .. image:: quickstart_LLR.svg
-  :width: 400
- 
+  :width: 50%
+
+A helper routine is included to simplify making plots like these::
+
+    from JMCTF.plotting import plot_chi2 
+    fig = plt.figure(figsize=(5,3))
+    ax = fig.add_subplot(111)
+    plot_chi2(ax,LLR,DOF)
+    ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    fig.tight_layout()
+    plt.show()
+
+which produces the same plot as above.
+
+Knowing the distribution of a test allows one to go on and compute such things as p-values to try and exclude the chosen null hypothesis. Of course, when the test statistic distribution is known then one does not need to do Monte Carlo simulations, so the usefulness of JMCTF is only manifest when one either cannot analytically determine test statistic distributions at all, or when asymptotic assumptions are suspected or known to fail. We will look at these sorts of issues in section (TODO).
+
+Maximum likelihood estimators
+-----------------------------
+
+The profile likelihood ratio results in the previous section rely on JMCTF having found accurate maximum likelihood estimates (MLEs) for free parameters. If you are concerned that these are not being correctly found by the minimisation routines, or if you just want to see the values for yourself, then you can simply inspect the parameter dictionaries that are returned from the fitting routines (`par_dicts_full` and `par_dicts_nuis` in the example above). Their structure was discussed at the end of section :ref:`combine_into_joint_long`. Some helper routines exist to make it easy to plot the simulated distributions of these MLEs (as well as the distributions of the samples)::
+
+    from JMCTF.plotting import plot_sample_dist
+    fig, ax_dict = plot_sample_dist(samples)
+    fig.tight_layout()
+
+.. image:: quickstart_sample_dists.svg
+  :width: 100%
+::
+    
+    from JMCTF.plotting import plot_MLE_dist
+    fig, ax_dict = plot_MLE_dist(par_dicts_full["fitted"])
+    # Overlay nuisance-only MLE dists onto full fit MLE dists
+    plot_MLE_dist(par_dicts_nuis["fitted"],ax_dict) 
+    fig.tight_layout()
+    plt.show()
+
+.. image:: quickstart_MLE_dists.svg
+  :width: 100%
+
+These plots are currently a bit rough, having only really been used for internal debugging purposes. But you may find them useful for quickly visualising the output of the simulations.
