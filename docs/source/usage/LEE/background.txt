@@ -1,0 +1,53 @@
+.. _lee_background:
+
+Background theory and motivation
+================================
+
+A full description of the techniques used here can be found in <paper to come>, however I will give a brief overview here. As in the rest of JMCTF, we are primarily concerned with performing hypothesis tests based on likelihood ratios, such as
+
+.. math::
+    :label: LR_def
+
+    q_\Lambda = -2 \log \frac{L(\theta_0,\hat{\eta};x)}{L(\hat{\hat{\theta}},\hat{\hat{\eta}};x)} 
+
+where :math:`L(\theta,\eta;x)` is a likelihood function parameterised by interesting parameters :math:`\theta` and nuisance parameters `\eta`. :math:`x` is a fixed observation sampled from an associated pdf :math:`p(x|\theta',\eta')`, where :math:`\theta'` and :math:`\eta'` are therefore the "true" values of :math:`\theta` and :math:`\eta`. In the numerator, :math:`\hat{\eta}` is the maximum likelihood estimator (MLE) for :math:`\eta` with :math:`\theta` fixed to the value :math:`\theta_0`, whilst in the denominator :math:`\hat{\hat{\theta}}` and :math:`\hat{\hat{\eta}}` denote the "global" MLE point in the joint :math:`\{\theta,\eta\}` parameter space.
+
+Under appropriate regularity and smoothness conditions (in accordance with Wilks' theorem), :math:`q_\Lambda` asymptotically follows a :math:`\chi^2` distribution, with degrees of freedom equal to the dimension of :math:`\theta`.
+
+So far so good. In simple cases where you nonetheless worry that asympototic conditions may fail, you can use JMCTF to simulate this test statistic by creating the appropriate joint distribution and doing the required parameter fits. However, you can only do this if the parameters you are interested in are those that directly parameterise your joint distribution. 
+
+In more complicated cases, it is common to have some "master theory" that maps onto only a subset of the full parameter space of the direct joint distribution parameters. In the above example, suppose that we have a theory :math:`T` that acts as the map :math:`T:\phi \rightarrow \theta`. This mapping can in general be arbitrarily complicated, map between very different dimensions of parameter space, and need not be surjective or injective. This mapping may also not be possible to describe via TensorFlow operations, in which case JMCTF has no hope of fitting these parameters for you [#map]_. To be explicit, when we are interested in testing this sort of "master theory" we can rewrite Eq. :eq:`LR_def` as
+
+.. math::
+    :label: LR_def2
+
+    q_\Lambda = -2 \log \frac{L(T(\phi_0),\hat{\eta};x)}{L(T(\hat{\hat{\phi}}),\hat{\hat{\eta}};x)} 
+
+but the fit in the denominator is not something that JMCTF can do for you.
+
+So, how can we proceed? Suppose that you can provide the mapping :math:`T` for any input parameters :math:`\phi`. In that case, JMCTF can still be used to evaluate test statistics of the form:
+
+.. math::
+    :label: LR_def3
+
+    q_\Lambda = -2 \log \frac{L(T(\phi_0),\hat{\eta};x)}{L(T(\phi_1),\hat{\hat{\eta}};x)} 
+
+where we now have a single fixed "alternate hypothesis" :math:`T(\phi_1)`. This can be used to conduct a test of :math:`T(\phi_0)` vs :math:`T(\phi_1)`, however this is not what we really want to do. We want to perform a test with the whole theory :math:`T` as the alternate hypothesis, not just fixed points in the parameter space of :math:`T`.
+
+We can get closer to the desired test statistic by doing *many* tests of the kind in Eq. :eq:`LR_def3`, however if we do something like choose the lowest p-value out of these tests as our reported p-value for excluding :math:`T(\phi_0)` then we will have done a kind a "p-hacking", i.e. performed "multiple comparisons", i.e. fallen victim of the Look-elsewhere effect. However, this means that our problem can be re-imagined as one of correcting for this look-elsewhere effect.
+
+To do this, rather than conduct many separate tests, we want to effectively combine them all into one test. So, suppose we have a list of "alternate hypotheses" from the parameter space of :math:`T` that "adequately" [#ade]_ spans the space :math:`\phi`. For each trial observation :math:`x`, then, rather than find :math:`\hat{\hat{\phi}}` we find the alternate hypothesis that gives the highest likelihood out of the candidate set. Let this hypothesis be labelled :math:`\tilde{\phi}`. Our test statistic can then be written as
+
+.. math::
+    :label: LR_def4
+
+    q_\Lambda = -2 \log \frac{L(T(\phi_0),\hat{\eta};x)}{L(T(\tilde{\phi}),\hat{\hat{\eta}};x)} 
+
+Given a suitably comprehensive set of alternate hypotheses, then, this test should give results close to those of Eq. :eq:`LR_def2`. Unfortunately this remains a rather computationally expensive process: for each of (say) :math:`10^6` simulated observations :math:`x`, we need to fit the nuisance parameters for (say) :math:`10^3-10^6` (or more) alternative hypotheses, and then select the one that gives the highest likelihood. This is an awful lot of fitting, even for the fast gradient descent fitters of TensorFlow.
+
+JMCTF provides tools to perform and manage all these fits, and also includes routines for making some extra approximations to speed things up. These are described further in section TODO.
+
+.. [#map] In fact JMCTF cannot currently help you even if the mapping *can* be represented in TensorFlow operations. This would be quite a powerful feature, and it could be added in the future if there is demand for it, but for now it was not necessary for the projects that motivated the creation of JMCTF.
+
+.. [#ade] The issue of what constitutes an "adequate" set of fixed alternate hypotheses from :math:`T` is not an easy one to answer, however we can say that ideally one should provide enough alternate hypotheses so that, for any sample observation :math:`x`, the likelihood value under the "best fit" fixed alternate hypothesis is sufficiently close to the likelihood value under the "true" MLE of :math:`\phi`.
+

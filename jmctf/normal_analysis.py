@@ -31,7 +31,8 @@ class NormalAnalysis(BaseAnalysis):
         self.theta_scaling = sigma # Assumes extra model-dependent error will be somewhat similar to sigma
         self.x_obs = x_obs
         self.exact_MLEs =  True # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
-        
+        self.const_pars = ['sigma_t']
+
     def tensorflow_model(self,pars):
         """Output tensorflow probability model object, to be combined with models from
            other analysis and sampled from.
@@ -80,7 +81,7 @@ class NormalAnalysis(BaseAnalysis):
 
         if 'sigma_t' not in pars.keys():
             # Default for when no extra "theory" uncertainty is provided
-            sigma_t = tf.constant(c.reallysmall,dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
+            sigma_t = tf.constant([c.reallysmall],dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
         else:
             sigma_t = pars['sigma_t'] 
 

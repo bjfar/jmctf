@@ -1,0 +1,6 @@
+.. _lee_simple_example:
+
+A simple example of a look-elsewhere effect correction
+======================================================
+
+

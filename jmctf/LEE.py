@@ -26,6 +26,11 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
        'signal' providing the set of signals to consider for the correction
        
        Also computes local p-values for all input signal hypotheses.
+
+       NOTE: This routine is somewhat old and deprecated. Use LEECorrectionMaster
+       class below to do this in a smarter way, where samples and fit results are
+       saved/loaded from database files and can be updated with more samples, for
+       much better operation with large simulations.
     """
     print("Simulating {0}".format(name))
     
@@ -279,6 +284,17 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
  
     fig4.savefig("local_vs_global_sigma_{0}.png".format(name))
 
+def fix_dims(array):
+    """Helper function for ensuring that parameter-related arrays have the
+       correct dimensions for operations in LEECorrector classes"""
+    if len(array.shape)==1:
+       out = tf.expand_dims(array, axis=1)
+    elif len(array.shape)==3:
+       out = tf.squeeze(array, axis=1)
+    else:
+       out = array
+    return out
+
 class LEECorrectorBase:
     """Base class for LEE correector classes, containing common utilities such as SQL
        database access"""
@@ -333,20 +349,20 @@ class LEECorrectorBase:
 
 class LEECorrectorMaster(LEECorrectorBase):
     """A class to wrap up analysis and database access routines to manage LEE corrections
-       for large numbers of analyses, with many signal hypotheses to test, and with many
-       random MC draws. Allows more signal hypotheses and random draws to be added to the
+       for large numbers of analyses, with many alternate hypotheses to test, and with many
+       random MC draws. Allows more alternate hypotheses and random draws to be added to the
        simulation without recomputing everything"""
 
-    def __init__(self,analyses,path,master_name,nullsignals,nullname):
+    def __init__(self,analyses,path,master_name,null_hyp,nullname):
         super().__init__(path,"{0}_{1}".format(master_name,nullname))
 
         self.LEEanalyses = {}
-        self.profiled_table = 'profiled' # For combined results profiled over all signal hypotheses
+        self.profiled_table = 'profiled' # For combined results profiled over all alternate hypotheses
         self.nullname = 'null' # For combined results for null hypothesis
-        self.local_table = 'local_' # Base name for tables related to specific signal hypotheses whose local properties we want to investigate
+        self.local_table = 'local_' # Base name for tables related to specific alternate hypotheses whose local properties we want to investigate
         self.analyses = analyses # For introspection only. Otherwise LEECorrectorAnalysis interface is used
         for a in self.analyses:
-            self.LEEanalyses[a.name] = LEECorrectorAnalysis(a,path,master_name,{a.name: nullsignals[a.name]},nullname)
+            self.LEEanalyses[a.name] = LEECorrectorAnalysis(a,path,master_name,{a.name: null_hyp[a.name]},nullname)
 
         conn = self.connect_to_db()
         cur = conn.cursor()
@@ -371,8 +387,8 @@ class LEECorrectorMaster(LEECorrectorBase):
         return JointDistribution(self.analyses).get_parameter_structure()
 
     def add_events(self,N,bias=0):
-        """Generate pseudodata for all analyses under the null signal hypothesis"""
-        logw = tf.zeros((N,1))
+        """Generate pseudodata for all analyses under the null hypothesis"""
+        logw = tf.zeros((int(N),1))
         for name,a in self.LEEanalyses.items():
             logw += a.add_events(N,bias)
         # Record the eventIDs in the combined database, plus the combined weights
@@ -390,22 +406,22 @@ class LEECorrectorMaster(LEECorrectorBase):
 
     def process_null(self):
         """Perform nuisance parameter fits of null hypothesis for all events where it hasn't already been done"""
-        self.process_signal_local() # Special case of local signal processing for the null signal case.
+        self.process_alternate_local() # Special case of local alternate hypothesis processing for the null hypothesis case.
 
-    def process_signal_local(self,signal=None,name=None):
-        """Perform nuisance parameter fits of null hypothesis for all events where it hasn't already been done"""
+    def process_alternate_local(self,alt_hyp=None,name=None):
+        """Perform nuisance parameter fits of single null/alternate hypotheses for all events where it hasn't already been done"""
         for a in self.LEEanalyses.values():
-            if signal is None:
+            if alt_hyp is None:
                 a.process_null()
             elif name is None:
-                raise ValueError("Name for local signal needs to be provided, for identifying it in the results database!")
+                raise ValueError("Name for alternate hypothesis needs to be provided, for identifying it in the results database!")
             else:
-                a.process_signal_local(signal,name)
+                a.process_alternate_local(alt_hyp,name)
    
         # Fits completed; extract all results and get combined neg2logL values
         comb = None
         for a in self.LEEanalyses.values():
-            if signal is None: table = a.local_table+a.nullname
+            if alt_hyp is None: table = a.local_table+a.nullname
             else: table = a.local_table+name
             df = a.load_results(table,['EventID','neg2logL'])
             #print("df:",df)
@@ -415,14 +431,14 @@ class LEECorrectorMaster(LEECorrectorBase):
                 comb += df
         conn = self.connect_to_db()
         cur = conn.cursor()
-        if signal is None: table = self.local_table+self.nullname
+        if alt_hyp is None: table = self.local_table+self.nullname
         else: table = self.local_table+name
         sql.create_table(cur,table,[('EventID','integer primary key'),('neg2logL','real')])
         sql.upsert(cur,table,comb,'EventID')
         self.close_db(conn)
 
         # Do the same for asymptotic/Asimov and observed values (non-null case only)
-        if signal is not None:
+        if alt_hyp is not None:
             comb = None
             cols = ['qAsb','qAb','qO','neg2logL','neg2logL_quad']
             for a in self.LEEanalyses.values():
@@ -459,8 +475,8 @@ class LEECorrectorMaster(LEECorrectorBase):
             self.close_db(conn)
 
 
-    def _process_signal_batch(self,signal_gen,EventIDs,dbtype):
-        """For internal use in 'process_signals' function. Processes a single batch of events."""
+    def _process_alternate_batch(self,alt_hyp_gen,EventIDs,dbtype):
+        """For internal use in 'process_alternate' function. Processes a single batch of events."""
         quads = []
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
@@ -476,35 +492,35 @@ class LEECorrectorMaster(LEECorrectorBase):
             events = c.add_prefix(name,a.load_events(EventIDs))
             print("loaded events:", events)
             quads += [a.compute_quad(pars,events)]
-        Ns = signal_gen.count
-        Nchunk = signal_gen.chunk_size
+        Ns = alt_hyp_gen.count
+        Nchunk = alt_hyp_gen.chunk_size
         Nbatches = Ns // Nchunk
         rem = Ns % Nchunk
         if rem!=0: Nbatches+=1
         j=0
-        bar = Bar('Processing signals in batches of {0}'.format(Nchunk), max=Nbatches)
-        signal_gen.reset()
+        bar = Bar('Processing alternate hypotheses in batches of {0}'.format(Nchunk), max=Nbatches)
+        alt_hyp_gen.reset()
         min_neg2logLs = None
         for i in range(Nbatches):
             if rem!=0 and i==Nbatches: size = rem
             else: size = Nchunk
             comb_neg2logLs = None
-            sig_chunk, signalIDs = signal_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+            alt_chunk, altIDs = alt_hyp_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
             for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
                 #print("running quad:",name)
-                neg2logLs = quad({name: sig_chunk[name]})
-                # Record all signal likelihoods to disk, so that we can use them for bootstrap resampling later on.
-                # Warning: may take a lot of disk space if there are a lot of signals.
-                a.record_signal_logLs(neg2logLs,signalIDs,EventIDs,Ltype='quad',dbtype=dbtype)
+                neg2logLs = quad({name: alt_chunk[name]})
+                # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
+                # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
+                a.record_alternate_logLs(neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
                 #print("...done")
-                #print("signal neg2logLs:", neg2logLs)
+                #print("alterate hypothesis neg2logLs:", neg2logLs)
                 if comb_neg2logLs is None:
                     comb_neg2logLs = neg2logLs
                 else:
                     comb_neg2logLs += neg2logLs
 
-            #print("sig_chunk:", sig_chunk)
-            # Select the mininum -2logL from across all signal hypotheses
+            #print("alt_chunk:", alt_chunk)
+            # Select the mininum -2logL from across all alternate hypotheses
             if min_neg2logLs is not None:
                 all_neg2logLs = tf.concat([tf.expand_dims(min_neg2logLs,axis=-1),comb_neg2logLs],axis=-1)
             else:
@@ -515,9 +531,9 @@ class LEECorrectorMaster(LEECorrectorBase):
         bar.finish() 
         return min_neg2logLs  
  
-    def process_signals_observed(self,signal_gen,quad_only=True,dbtype='hdf5'):
-        """Perform fits for all supplied signal hypotheses, for just the *observed* data"""
-        min_neg2logLs = self._process_signal_batch(signal_gen,"observed",dbtype)
+    def process_alternate_observed(self,alt_hyp_gen,quad_only=True,dbtype='hdf5'):
+        """Perform fits for all supplied alternate hypotheses, for just the *observed* data"""
+        min_neg2logLs = self._process_alternate_batch(alt_hyp_gen,"observed",dbtype)
         
         # Extract data for null hypothesis (should be pre-computed by process_null)
 
@@ -532,15 +548,15 @@ class LEECorrectorMaster(LEECorrectorBase):
         self.close_db(conn)
 
 
-    def process_signals(self,signal_gen,quad_only=True,new_events_only=False,event_batch_size=1000,dbtype='hdf5'):
-        """Perform fits for all supplied signal hypotheses, for all events in the database,
-           and record the best-fit signal for each event. Compares to any existing best-fits
+    def process_alternate(self,alt_hyp_gen,quad_only=True,new_events_only=False,event_batch_size=1000,dbtype='hdf5'):
+        """Perform fits for all supplied alternate hypotheses, for all events in the database,
+           and record the best-fit alternate hypothesis for each event. Compares to any existing best-fits
            in the database and updates if the new best-fit is better.
            If 'new_events_only' is true, fits are only performed for events in the database
-           for which no signal fit results are yet recorded."""
-        # First process the observed signal
-        print("Processing signals for *observed* dataset")
-        self.process_signals_observed(signal_gen,quad_only,dbtype)
+           for which no alternate hypothesis fit results are yet recorded."""
+        # First process the observed dataset
+        print("Processing alternate hypotheses for *observed* dataset")
+        self.process_alternate_observed(alt_hyp_gen,quad_only,dbtype)
         print("...done!")
         Nevents = self.count_events_comb()
         still_processing = True
@@ -556,7 +572,7 @@ class LEECorrectorMaster(LEECorrectorBase):
                 offset += event_batch_size
             if EventIDs is None: still_processing = False
             if still_processing:
-                min_neg2logLs = self._process_signal_batch(signal_gen,EventIDs,dbtype)              
+                min_neg2logLs = self._process_alternate_batch(alt_hyp_gen,EventIDs,dbtype)              
                 # Write the compute min_neg2logLs to disk for this batch of events
                 data = pd.DataFrame(min_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_quad'])
                 data.index.name = 'EventID' 
@@ -572,14 +588,14 @@ class LEECorrectorMaster(LEECorrectorBase):
         """Obtain a bootstrap resampling of all 'full' tables in all analyses, 
            combine/profile the likelihoods, and add results to bootstrap table.
 
-           Keep batch size small when number of signals is large, to avoid
+           Keep batch size small when number of alternate hypotheses is large, to avoid
            running out of RAM. Will have likelihoods for all bootstrap events
-           for all signals."""
+           for all alternate hypotheses."""
   
         all_min_neg2logL = None
         all_b_neg2logL = None
         if N=='all': # Special keyword to just re-do profiling rather than bootstrap resampling. To cross-check this profiling calculation with original calculation.
-            print("Recomputing profile over signal hypothesis for existing events (no resampling...)")
+            print("Recomputing profile over alternate hypothesis for existing events (no resampling...)")
         else:
             Nbatches = int(np.ceil(N/batch_size))
             bar = Bar('Generating {0} bootstrap samples in batches of {1}'.format(N,batch_size), max=Nbatches*len(self.LEEanalyses))
@@ -692,7 +708,7 @@ class LEECorrectorMaster(LEECorrectorBase):
 
         if combN<maxN: self.add_events_comb(maxN-combN)
 
-    def add_signals(self,signals):
+    def add_alternate(self,alt_hyp):
         pass
 
     def add_to_database(self):
@@ -711,28 +727,29 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         - 1 master directory for each complete analysis to be performed, containing:
           - 1 database file per Analysis class, containing:
             - 1 'master' table assigning IDs (just row numbers) to each 'event', or pseudoexperiment, and recording the data
-            - 1 table synchronised with the 'master' table, containing local test statistic values associated with the (fixed) observed 'best fit' signal point
-              (may add more for other 'special' signal points for which we want local test statistic stuff)
+            - 1 table synchronised with the 'master' table, containing local test statistic values associated with the (fixed) observed 'best fit' alternate hypothesis
+              (may add more for other 'special' alternate hypotheses for which we want local test statistic stuff)
             - 1 table  "                            "                        test statistic values associated with the combined best fit point for each event
           - 1 datafiles file for the combination, containing:
             - 1 table containining combined test statistic values for each event (synchronised with each Analysis file)
 
-        We have to compute test statistic values for *ALL* signal hypotheses to be considered, for every event, however
+        We have to compute test statistic values for *ALL* alternate hypotheses to be considered, for every event, however
         this is too much data to store. So we keep only the 'profiled' test statistic values, i.e. the values extremised
-        over the available signal hypotheses. If more signal hypotheses are added, we can just compare to the already-computed
+        over the available alternate hypotheses. If more alternate hypotheses are added, we can just compare to the already-computed
         extrema test statistic values for each event to see if they need to be updated.
     """
 
-    def __init__(self,analysis,path,comb_name,nullsignal,nullname):
+    def __init__(self,analysis,path,comb_name,null_hyp,nullname):
         super().__init__(path,analysis.name)
 
         self.event_table = 'events'
         self.nullname = 'null' # String to identify null hypothesis tables
         self.local_table = 'local_' # Base name for tables containing local TS data)
+        self.null_table = self.local_table + self.nullname
         self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
-        self.full_table_quad = 'all_signals_quad' # Table of profile likelihood (quadratic approximation) values for all events *and* all signals. Only generated on request due to possibly huge size.
+        self.full_table_quad = 'all_alternate_quad' # Table of profile likelihood (quadratic approximation) values for all events *and* all alternate hypotheses. Only generated on request due to possibly huge size.
         self.analysis = analysis
-        self.nullsignal = nullsignal # "signal" parameters to be used as the 'background-only' null hypothesis
+        self.null_hyp = null_hyp # Parameters to be used as the null hypothesis
         self.joint = JointDistribution([self.analysis])
         conn = self.connect_to_db()
 
@@ -763,12 +780,12 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             raise ValueError(msg) 
 
     def add_events(self,N,bias=0):
-        """Add N new events generated under null hypothesis signal to the event table.
+        """Add N new events generated under null hypothesis to the event table.
            Sampling can be biased to higher SR counts with the 'bias' parameter, for
            importance sampling. Make sure to then consider the event weights in final results!"""
         #print("Recording {0} new events...".format(N))
         start = time.time()
-        joint = JointDistribution([self.analysis],self.nullsignal)
+        joint = JointDistribution([self.analysis],self.null_hyp)
 
         # Generate pseudodata
         if bias>0:
@@ -796,8 +813,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # Paste together data tables
         datalist = [logw]
         for name, size in structure.items():
-            datalist += [tf.squeeze(samples[self.analysis.name+"::"+name],axis=1)] # Remove 'signal' dimension, should be size 1 (TODO: add check for this)
-         
+            sub_events = samples[self.analysis.name+"::"+name]
+            datalist += [fix_dims(sub_events)]          
         datatable = tf.concat(datalist,axis=-1).numpy()
 
         cur.executemany(command,  map(tuple, datatable.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
@@ -853,7 +870,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             i = 1;
             events = {}
             for name, size in structure.items():
-                subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
                 i+=size
                 events[self.analysis.name+"::"+name] = subevents
 
@@ -898,7 +915,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 i = 0;
                 events = {}
                 for name, size in structure.items():
-                    subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                    subevents = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
                     i+=size
                     events[name] = subevents
             else:
@@ -935,44 +952,44 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             i = 0
             pars = {}
             for par,size in nuis_structure.items():
-                pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'signal' parameter dimension
+                pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
                 i+=size
             nuis_pars = {self.analysis.name: pars}
         else:
             nuis_pars = None
         return nuis_pars
 
-    def fit_signal_batch(self,events,signals,signalIDs=None,record_all=True):
-        """Compute signal fits for selected eventIDs
+    def fit_alternate_batch(self,events,alt_hyp,altIDs=None,record_all=True):
+        """Compute alternate hypothesis fits for selected eventIDs
            Returns test statistic values for combination
            with other analyses. 
         """
-        # Run full numerical fits of nuisance parameters for all signal hypotheses
-        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(events, signals, log_tag='qsb')
+        # Run full numerical fits of nuisance parameters for all alternate hypotheses
+        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(events, alt_hyp, log_tag='qsb')
 
         return qsb
 
     def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
            set of events, expanding around the supplied nuisance parameter point with
-           the null signal"""
-        joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.nullsignal,pars))
+           the null hypothesis"""
+        joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
         quadf = joint_fitted_b.quad_loglike_f(events)
 
         return quadf 
 
-    def record_signal_logLs(self,neg2logLs,signalIDs,EventIDs,Ltype,dbtype='hdf5'):
-        """Record likelihoods from a batch of signal fits to 'full' tables.
-           In this case ID numbers also need to be assigned to signals,
+    def record_alternate_logLs(self,neg2logLs,altIDs,EventIDs,Ltype,dbtype='hdf5'):
+        """Record likelihoods from a batch of alternate hypothesis fits to 'full' tables.
+           In this case ID numbers also need to be assigned to alternate hypotheses,
            so that we can uniquely assign each of them to a row in the
            output table.
 
-           Note: Tables are oriented such that events are columns and signals
+           Note: Tables are oriented such that events are columns and alternate hypotheses
            are rows. 1000 events per table, since SQLite likes small numbers 
            of columns (but can hand zillions of rows)
            """
         if Ltype != 'quad':
-            raise ValueError("Sorry, signal fit result recording has so far only been implemented for the 'quadratic approximation' results.")
+            raise ValueError("Sorry, alternate hypothesis fit result recording has so far only been implemented for the 'quadratic approximation' results.")
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
             observed_mode = True
@@ -1019,7 +1036,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      else:
                          eventID_batch = EventIDs[mask]
   
-                     # # likelihoods to be stored with one event per column (and zillions of rows corresponding to the signals)
+                     # # likelihoods to be stored with one event per column (and zillions of rows corresponding to the alternate hypotheses)
                      # columns = [("E_{0}".format(E_id),"real") for E_id in eventID_batch]
                      # col_names = [x[0] for x in columns]
   
@@ -1029,15 +1046,15 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      # sql.add_columns(cur,this_table,columns)
 
                      # # Add likelihoods to output record.
-                     # data = pd.DataFrame(neg2logL_batch.numpy().T,index=signalIDs,columns=col_names)
+                     # data = pd.DataFrame(neg2logL_batch.numpy().T,index=altIDs,columns=col_names)
                      # data.index.name = 'SignalID' 
                      # sql.upsert(cur,this_table,data,primary='SignalID')
 
                      #====== Version 2 ======
                      # Ok it is very slow to retrieve these giant tables with separately stored entries.
                      # However, we *can* just stream raw bits straight into SQL entries. So perhaps just store
-                     # entire signal table for each event as one entry. I.e. just one row to retrieve!
-                     # Downside is that all signals have to be computed at once, cannot add more.
+                     # entire alternate hypothesis table for each event as one entry. I.e. just one row to retrieve!
+                     # Downside is that all alternate hypotheses have to be computed at once, cannot add more.
                      # Or rather more can be added more rows I guess, but won't know if there is overlap.
 
                      
@@ -1080,7 +1097,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             pass
  
     def get_bootstrap_sample(self,N,dbtype='hdf5'):
-        """Obtain a bootstrap resampling of size N of the 'full' output tables for all recorded signals"""
+        """Obtain a bootstrap resampling of size N of the 'full' output tables for all recorded alternate hypotheses"""
         try:
             # If a range of event IDs is passed, just extract those events, don't resample.
             # This is mainly for testing/cross-checking purposes.
@@ -1151,7 +1168,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 if np.sum(mask)>0:
                     these_eventIDs = bootstrap_EventIDs[mask]
 
-                    # Get all logL values for all signal rows for these events
+                    # Get all logL values for all alternate hypothesis rows for these events
                     command = "SELECT "+", ".join(["E_{0}".format(ID) for ID in these_eventIDs])
                     command += " FROM {0}".format(self.full_table_quad+"_batch_{0}".format(i))
                     #print("command:", command)
@@ -1160,20 +1177,20 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                     these_events = []
                     for row in results:
                         these_events += [tf.stack(row,axis=1)] # Join each row of results along events direction 
-                    all_events += [tf.concat(these_events,axis=0)] # Join all these events along signal direction
+                    all_events += [tf.concat(these_events,axis=0)] # Join all these events along alternate hypothesis direction
             if len(all_events) > 0:
-                signal_neg2logL = tf.concat(all_events,axis=1) # Join all event columns together
+                alternate_neg2logL = tf.concat(all_events,axis=1) # Join all event columns together
             else:
-                signal_neg2logL = None
+                alternate_neg2logL = None
             self.close_db(conn)
         elif dbtype is 'hdf5':
             for ID in bootstrap_EventIDs:
                 all_events += [f["E_{0}".format(ID)][:]]  
             f.close()
             if len(all_events) > 0:
-                signal_neg2logL = tf.stack(all_events,axis=1) # Join all event columns together
+                alternate_neg2logL = tf.stack(all_events,axis=1) # Join all event columns together
             else:
-                signal_neg2logL = None
+                alternate_neg2logL = None
 
         # Actually we also need the background-only neg2logL values, so grab those too
         # I think here it is fine, and easier, to load them all and do the selection in RAM.
@@ -1183,25 +1200,25 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             background_neg2logL = None
 
-        return signal_neg2logL, background_neg2logL
+        return alternate_neg2logL, background_neg2logL
 
-    def record_bf_signal_stats(self):
+    def record_bf_alternate_stats(self):
         pass
 
     def process_null(self):
         """Compute null-hypothesis fits for events currently in our output tables
            But only for events where this hasn't already been done."""
-        self.process_signal_local()
+        self.process_alternate_local()
        
-    def process_signal_local(self,signal=None,name=None):
+    def process_alternate_local(self,alt_hyp=None,name=None):
         """Compute local hypothesis fits for events currently in our output tables
            But only for events where this hasn't already been done."""
-        if signal is None: 
-            signal = self.nullsignal
+        if alt_hyp is None: 
+            alt_hyp = self.null_hyp
             name = self.nullname
             null_case = True
         elif name is None:
-            raise ValueError("'name' argument cannot be None for non-null local signal processing! Need a name to identify output in results database")
+            raise ValueError("'name' argument cannot be None for non-null local hypothesis processing! Need a name to identify output in results database")
         else:
             null_case = False
 
@@ -1210,7 +1227,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         batch_size = 10000
         continue_processing = True
         total_events = self.count_events()
-        bar = Bar("Performing fits of signal '{0}' for analysis {1} in batches of {2}".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
+        bar = Bar("Performing fits of hypothesis '{0}' for analysis {1} in batches of {2}".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
         while continue_processing:
             EventIDs, events = self.load_N_events(batch_size,self.local_table+name,'neg2logL is NULL')
             if EventIDs is None:
@@ -1218,17 +1235,18 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 continue_processing = False
             if continue_processing:
                 #print("Fitting w.r.t background-only samples")
-                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, signal, log_tag='q_'+name)
+                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, alt_hyp, log_tag='q_'+name)
                 #print("nuis_pars_b:", nuis_pars_b)
                 # Write events to output database               
                 # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
-                arrays = [qb]
+                arrays = [fix_dims(qb)]
                 cols = ["neg2logL"]
                 fitted_pars_b = nuis_pars_b["fitted"]
                 for par, arr in fitted_pars_b[self.analysis.name].items():
                     for i in range(arr.shape[-1]):
                         cols += ["{0}_{1}".format(par,i)]
-                    arrays += [tf.squeeze(arr,axis=1)] # remove 'signal' dimension
+                    arrays += [fix_dims(arr)] # remove 'alternate hypothesis' dimension, if needed
+                print("arrays:", arrays)
                 allpars = tf.concat(arrays,axis=-1)               
                 data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
                 data.index.name = 'EventID' 
@@ -1244,14 +1262,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if null_case:
             Osamples = joint.Osamples
             # Also record results for fit to observed data
-            qbO, joint_fitted, pars = joint.fit_nuisance(Osamples, self.nullsignal) 
-            arrays = [qbO]
+            qbO, joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp) 
+            arrays = [fix_dims(qbO)]
             cols = ['neg2logL']
             fitted_pars = pars["fitted"]
             for par, arr in fitted_pars[self.analysis.name].items():
                 for i in range(arr.shape[-1]):
                     cols += ["{0}_{1}".format(par,i)]
-                arrays += [tf.squeeze(arr,axis=1)] # remove 'signal' dimension 
+                arrays += [fix_dims(arr)] # remove 'alternate hypothesis' dimension, if needed 
             allpars = tf.concat(arrays,axis=-1)               
             data = pd.DataFrame(allpars.numpy(),columns=cols)
             data.index.rename('EventID',inplace=True) 
@@ -1263,11 +1281,11 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             self.close_db(conn)
 
         else:
-            # If this isn't the null case, then should also compute the various Asimov likelihoods for this signal, for asymptotic results
-            joint0s = JointDistribution([self.analysis],signal)
-            joint0  = JointDistribution([self.analysis],self.nullsignal)
+            # If this isn't the null case, then should also compute the various Asimov likelihoods for this hypothesis, for asymptotic results
+            joint0s = JointDistribution([self.analysis],alt_hyp)
+            joint0  = JointDistribution([self.analysis],self.null_hyp)
  
-            # Get Asimov samples for nuisance MLEs with fixed signal hypotheses
+            # Get Asimov samples for nuisance MLEs with fixed alternate hypotheses
             samplesAsb = joint0s.Asamples 
             samplesAb = joint0.Asamples
 
@@ -1279,16 +1297,16 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             
             # Fit distributions for Asimov datasets for the other half of each
             # likelihood ratio
-            qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, self.nullsignal,log_tag='bAsb')
-            qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, signal,log_tag='sbAsb')
+            qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, self.null_hyp, log_tag='bAsb')
+            qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, alt_hyp, log_tag='sbAsb')
 
             qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
             qAb = (qsbAb - qbAb)[0]
  
             # ...and fit the observed data too!
             Osamples = joint.Osamples
-            qbO , joint_fitted, pars = joint.fit_nuisance(Osamples, self.nullsignal)
-            qsbO, joint_fitted, pars = joint.fit_nuisance(Osamples, signal)
+            qbO , joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp)
+            qsbO, joint_fitted, pars = joint.fit_nuisance(Osamples, alt_hyp)
             qO = (qsbO - qbO)[0] # extract single sample result
 
             # Record everything!

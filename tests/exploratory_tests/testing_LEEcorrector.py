@@ -97,13 +97,13 @@ print("nuis:", nuis)
 print("nosignal:", nosignal)
         
 #lee.ensure_equal_events()
-#lee.add_events(int(1e3))
+lee.add_events(int(1e3))
 lee.process_null()
 sig_name = "cherry_picked"
-lee.process_signal_local(signal_test,name=sig_name)
-lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
-#lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
-#lee.process_signals(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
+lee.process_alternate_local(signal_test,name=sig_name)
+lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
+#lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
+#lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 
 bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100)
 #bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='hdf5')

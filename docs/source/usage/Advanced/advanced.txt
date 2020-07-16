@@ -1,0 +1,11 @@
+.. _advanced:
+
+Advanced usage
+=========================
+
+In these sections you can find explanations and demonstrations on advanced usage of JMCTF, such as adding custom Analysis classes.
+
+.. toctree::
+   :caption: Contents:
+
+   adding_new_analysis_classes

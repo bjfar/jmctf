@@ -1,0 +1,13 @@
+.. _lee:
+
+Look-elsewhere effect
+=========================
+
+One of the main motivations for creating JMCTF was to facilitate the computation of look-elsewhere effect (LEE) corrections (i.e. corrections for multiple comparisons, or multiple tests). In these sections you will find guidance on the tools available for performing these corrections, along with associated tools for managing large number of simulations/fits for multiple fixed "alternate" hypotheses. In fact you may find the management and database tools useful even if you are not interested in the LEE.
+
+.. toctree::
+   :caption: Contents:
+
+   background
+   a_simple_example
+

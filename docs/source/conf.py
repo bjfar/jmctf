@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'JMC-TF'
+project = 'JMCTF'
 copyright = '2020, Ben Farmer'
 author = 'Ben Farmer'
 
@@ -153,6 +153,9 @@ man_pages = [
      [author], 1)
 ]
 
+# Extra hook to add custom css
+def setup(app):
+    app.add_stylesheet('css/custom.css')
 
 # -- Options for Texinfo output ----------------------------------------------
 

@@ -13,6 +13,8 @@ functions consisting of many independent components, powered by TensorFlow.
    usage/installation
    usage/quickstart
    usage/Basics/basics
+   usage/Advanced/advanced
+   usage/LEE/lee
    examples/quickstart
    jmctf 
 

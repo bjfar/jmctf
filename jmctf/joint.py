@@ -212,6 +212,18 @@ class JointDistribution(tfd.JointDistributionNamed):
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
         #print("self.pars = ", self.pars)
 
+    def identify_const_parameters(self):
+        """Ask component analyses to report which of their parameters are to be
+           considered as always "constant", when it comes to computing gradients with 
+           respect to the log_prob (especially Hessians)."""
+        const_pars = {}
+        for a in self.analyses.values():
+            try:
+                const_pars[a.name] = a.const_pars
+            except AttributeError:
+                const_pars[a.name] = []
+        return const_pars
+
     def fix_parameters(self, pars):
        """Return a version of this JointDistribution object that has parameters fixed to the supplied values"""
        return JointDistribution(self.analyses.values(), pars)
@@ -465,9 +477,22 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Obtain Hessian matrix (and grad) at input parameter point
            Make sure to use de-scaled parameters as input!"""
 
+        # Separate "const" parameters
+        free_pars = {}
+        const_pars = {}
+        const_par_names = self.identify_const_parameters()
+        for a,p in pars.items():
+            free_pars[a] = {}
+            const_pars[a] = {}
+            for name,v in p.items():
+                if name in const_par_names[a]:
+                    const_pars[a][name] = v
+                else:
+                    free_pars[a][name] = v
+
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        catted_pars = self.cat_pars(pars)
+        catted_pars = self.cat_pars(free_pars)
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
         ##     print("inpars:", inpars)
@@ -489,7 +514,9 @@ class JointDistribution(tfd.JointDistributionNamed):
             # Avoids confusion about parameters getting copied and
             # breaking TF graph connections etc.
             inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
-            scaled_inpars = self.scale_pars(inpars)
+            # merge with const parameters
+            all_inpars = c.deep_merge(inpars,const_pars)
+            scaled_inpars = self.scale_pars(all_inpars)
             q = 0
             for a in self.analyses.values():
                 d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
@@ -577,14 +604,18 @@ class JointDistribution(tfd.JointDistributionNamed):
         pars = self.descale_pars(self.pars) # Make sure to use non-scaled parameters to get correct gradients etc.
         #print("Computing Hessian and various matrix operations for all samples...")
         H, g = self.Hessian(pars,samples)
-        #print("g:", g) # Should be close to zero if fits worked correctly
+        print("H:", H)
+        print("g:", g) # Should be close to zero if fits worked correctly
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
-        #print("descaled_pars:", pars)
-        #print("samples:", samples)
-        #print("interest_p:", interest_p)
-        #print("nuisance_p:", nuisance_p)
+        print("descaled_pars:", pars)
+        print("samples:", samples)
+        print("interest_p:", interest_p)
+        print("nuisance_p:", nuisance_p)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
+        print("Hii:", Hii)
+        print("Hnn:", Hnn)
+        print("Hin:", Hin)
         Hnn_inv = tf.linalg.inv(Hnn)
         gn = self.sub_grad(g,nuisance_i)
         A = tf.linalg.matvec(Hnn_inv,gn)

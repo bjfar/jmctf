@@ -1,7 +1,7 @@
 Installation
 ============
 
-.. _github: https://github.com/bjfar/JMCtf
+.. _github: https://github.com/bjfar/jmctf
 .. _pip: https://pip.pypa.io/en/stable/installing/
 .. _anaconda: https://conda.io/docs/user-guide/install/download.html
 
