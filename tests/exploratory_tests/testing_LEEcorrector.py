@@ -57,6 +57,8 @@ def get_grid(analyses,N):
 
 Ns, signals = get_grid(analyses_read,20) # For testing only! Will die if used for more than e.g. 3 total SRs.
 
+print("signals:",signals)
+
 class SigGen:
     """Object to supply signal hypotheses in chunks
        Replace with something that e.g. reads from HDF5 file

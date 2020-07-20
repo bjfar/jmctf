@@ -1065,6 +1065,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                          this_table = self.full_table_quad+"_batch_{0}".format(i)
                          columns = [("E_{0}".format(E_id),"array") for E_id in eventID_batch] # We defined a new datatype, 'array', for sqlite to use to store numpy arrays
                      col_names = [x[0] for x in columns]
+                     print("neg2logL_batch:", neg2logL_batch.numpy().T)
+                     print("col_names:", col_names)
                      data = pd.DataFrame(neg2logL_batch.numpy().T,columns=col_names)
 
                      if dbtype is 'hdf5':

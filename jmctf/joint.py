@@ -445,10 +445,10 @@ class JointDistribution(tfd.JointDistributionNamed):
     def get_parameter_structure(self):
         """Returns three dictionaries whose structure explains how parameters should be supplied
            to this object"""
-        free  = {a.name: a.get_free_parameter_structure() for a in self.analyses.values()}
+        interest  = {a.name: a.get_interest_parameter_structure() for a in self.analyses.values()}
         fixed = {a.name: a.get_fixed_parameter_structure() for a in self.analyses.values()}
         nuis  = {a.name: a.get_nuisance_parameter_structure() for a in self.analyses.values()} 
-        return free, fixed, nuis
+        return interest, fixed, nuis
 
     def fit_nuisance(self,samples,fixed_pars,log_tag='',verbose=False):
         """Fit nuisance parameters to samples for a fixed signal
@@ -541,7 +541,7 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        catted_pars = c.cat_pars(free_pars)
+        catted_pars = tf.Variable(c.cat_pars(free_pars)) # Our input variables to be traced
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
         ##     print("inpars:", inpars)
@@ -562,7 +562,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             # get log_prob for all component dists "manually"
             # Avoids confusion about parameters getting copied and
             # breaking TF graph connections etc.
-            inpars = c.uncat_pars(catted_pars,self.pars) # need to unstack for use in each analysis
+            inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
+            print("inpars:", inpars)
             # merge with const parameters
             all_inpars = c.deep_merge(inpars,const_pars)
             scaled_inpars = self.scale_pars(all_inpars)
@@ -572,8 +573,13 @@ class JointDistribution(tfd.JointDistributionNamed):
                 for dist_name, dist in d.items():
                     q += -2*dist.log_prob(samples[dist_name])
             grads = tape.gradient(q, catted_pars)
+            print("catted_pars:", catted_pars)
+            print("all_inpars:", all_inpars)
+            print("scaled_inpars:", scaled_inpars)
+            print("q:", q)
+            print("grads:", grads)
         hessians = tape.batch_jacobian(grads, catted_pars) # batch_jacobian takes first (the sample) dimensions as independent for much better efficiency
-        #print("H:",hessians)
+        print("H:",hessians)
         # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses. TODO: throw better error if dimension sizes not 1
         grads_out = tf.squeeze(grads,axis=[-2])
         hessians_out = tf.squeeze(hessians,axis=[-2,-4])
@@ -585,10 +591,11 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Separate input parameters into 'interest' and 'nuisance' lists,
            keeping tracking of their original 'indices' w.r.t. catted format.
            Mainly used for decomposing Hessian matrix."""
+        interest, fixed, nuisance = self.get_parameter_structure()
         interest_i = {} # indices of parameters in Hessian/stacked pars
         nuisance_i = {}
         interest_p = {} # parameters themselves
-        nuisance_p = {}         
+        nuisance_p = {} 
         i = 0
         for ka,a in pars.items():
             interest_p[ka] = {}
@@ -596,13 +603,20 @@ class JointDistribution(tfd.JointDistributionNamed):
             interest_i[ka] = {}
             nuisance_i[ka] = {}
             for kp,p in a.items():
-                N = p.shape[-1]
-                if kp=='theta': #TODO need a more general method for determining which are the nuisance parameters
+                if kp in nuisance[ka].keys():
+                    N = p.shape[-1]
                     nuisance_p[ka][kp] = p
                     nuisance_i[ka][kp] = (i, N)
-                else:
+                elif kp in interest[ka].keys():
+                    N = p.shape[-1]
                     interest_p[ka][kp] = p
                     interest_i[ka][kp] = (i, N)
+                elif kp in fixed[ka].keys():
+                    # Ignore the fixed parameters, they are bystanders in the Hessian calculation
+                    N = 0
+                else:
+                    msg = "Tried to decompose parameters into 'interest' and 'nuisance' groups, however an unrecognised parameter was detected in the list for analysis {0}: par was {1}".format(ka, kp)
+                    raise ValueError(msg)
                 i+=N
         return interest_i, interest_p, nuisance_i, nuisance_p
 
@@ -670,6 +684,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         A = tf.linalg.matvec(Hnn_inv,gn)
         B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         #print("...done!")
+        print("A:", A)
+        print("B:", B)
         return A, B, interest_p, nuisance_p
 
     def quad_loglike_f(self,samples):
@@ -694,23 +710,33 @@ class JointDistribution(tfd.JointDistributionNamed):
             for kp in a.keys():
                 if kp not in signal[ka].keys():
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
+                print("signal...", signal[ka][kp])
                 parlist += [signal[ka][kp]]
-        s = tf.constant(tf.concat(parlist,axis=-1),name="all_signal_parameters")
+        s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
         s_0 = c.cat_pars(interest) # stacked interest parameter values at expansion point
         theta_0 = c.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
-        #print("theta_0.shape:",theta_0.shape)
-        #print("A.shape:",A.shape)
-        #print("B.shape:",B.shape)
-        #print("s.shape:",s.shape)
-        #print("s_0.shape:",s_0.shape)
+        print("theta_0.shape:",theta_0.shape)
+        print("A.shape:",A.shape)
+        print("B.shape:",B.shape)
+        print("s.shape:",s.shape)
+        print("s_0.shape:",s_0.shape)
+        #print("theta_0:", theta_0)
+        #print("A:", A)
+        #print("B:", B)
+        #print("s:", s)
+        #print("s_0:", s_0)
         theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
+        print("theta_prof.shape:", theta_prof.shape)
         # de-stack theta_prof
         theta_prof_dict = c.uncat_pars(theta_prof,pars_template=nuisance)
-        #print("theta_prof_dict:", theta_prof_dict)
-        #print("signal:", signal)
+        print("theta_prof_dict:", theta_prof_dict)
+        print("signal:", signal)
         # Compute -2*log_prop
         joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
         q = -2*joint.log_prob(samples)
+        print("q.shape:", q.shape)
+        print("samples:", samples)
+        quit()
         return q
 

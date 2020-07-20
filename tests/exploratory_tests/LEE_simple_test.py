@@ -35,12 +35,13 @@ class SigGen:
         size = self.chunk_size
         chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.alt_hyp.items()}
         self.j += size
+        print("chunk:", chunk)
         return chunk, list(range(j,j+size))
 
 import tensorflow as tf
 import jmctf.common as c
-null_hyp = {"Test normal": {"mu": [0]}}
-alt_hyp = {"Test normal": {"mu": [mu]}} 
+null_hyp = {"Test normal": {"mu": [[0]]}}
+alt_hyp = {"Test normal": {"mu": np.array([mu]).T}} 
 DOF = 1
 
 from jmctf.LEE import LEECorrectorMaster
@@ -59,7 +60,7 @@ print("null_hyp:", null_hyp)
 print("alt_hyp:", alt_hyp)
 
 # Generate pseudodata samples from null hypothesis
-lee.add_events(1e4)
+# lee.add_events(1e4)
 
 # Fit null hypothesis nuisance parameters to recorded samples
 lee.process_null()

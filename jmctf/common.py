@@ -249,7 +249,8 @@ def cat_pars(pars):
     bcast = tf.broadcast_to(tf.constant(np.ones([1 for d in range(len(maxdims))]),dtype=TFdtype),maxshape)
     for p in parlist:
         matched_parlist += [p*bcast]
-    return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
+    #return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
+    return tf.concat(matched_parlist,axis=-1) 
 
 def uncat_pars(catted_pars,pars_template):
     """De-stack tensorflow parameters back into separate variables of

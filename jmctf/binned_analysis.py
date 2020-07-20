@@ -228,8 +228,8 @@ class BinnedAnalysis(BaseAnalysis):
             Osamples["x"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=c.TFdtype),0),0)
         return Osamples
 
-    def get_free_parameter_structure(self):
-        """Get a dictionary describing the structure of the free parameters in this analysis
+    def get_interest_parameter_structure(self):
+        """Get a dictionary describing the structure of the "interesting" parameters in this analysis
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
         return {"s": len(self.SR_n)}
 
