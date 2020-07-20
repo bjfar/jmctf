@@ -211,3 +211,57 @@ def convert_to_TF_constants(d,ignore_variables=False):
                raise ValueError(msg) from e
    return out
 
+# Nested list/tuple flattener. From https://stackoverflow.com/a/10824420/1447953
+# Modified to also suck values out of dicts (discarding keys)
+def flatten(container):
+    if isinstance(container, (Mapping)):
+        for i in flatten(list(container.values())):
+            yield i
+    else:
+        for i in container:
+            if isinstance(i, (list,tuple)):
+                for j in flatten(i):
+                    yield j
+            elif isinstance(i, (Mapping)):
+                for j in flatten(list(i.values())):
+                    yield j
+            else:
+                yield i
+
+def cat_pars(pars):
+    """Stack separate tensorflow parameters from a dictionary into
+       a single tensor, in order fixed by the dict default iteration order"""
+    parlist = []
+    maxdims = {}
+    for ka,a in pars.items():
+        for kp,p in a.items():
+            parlist += [p]
+            i = -1
+            for d in p.shape[::-1]:
+                if i not in maxdims.keys() or maxdims[i]<d: maxdims[i] = d
+                i-=1
+    maxshape = [None for i in range(len(maxdims))]
+    for i,d in maxdims.items():
+        maxshape[i] = d
+
+    # Attempt to broadcast all inputs to same shape
+    matched_parlist = []
+    bcast = tf.broadcast_to(tf.constant(np.ones([1 for d in range(len(maxdims))]),dtype=TFdtype),maxshape)
+    for p in parlist:
+        matched_parlist += [p*bcast]
+    return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
+
+def uncat_pars(catted_pars,pars_template):
+    """De-stack tensorflow parameters back into separate variables of
+       shapes know to each analysis. Assumes stacked_pars are of the
+       same structure as pars_template"""
+    pars = {}
+    i = 0
+    for ka,a in pars_template.items():
+        pars[ka] = {}
+        for kp,p in a.items():
+            N = p.shape[-1]
+            pars[ka][kp] = catted_pars[...,i:i+N]
+            i+=N
+    return pars
+

@@ -58,7 +58,7 @@ class BinnedAnalysis(BaseAnalysis):
             self.exact_MLEs = False
         else:
             # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
-            self.exact_MLEs = True
+            self.exact_MLEs = False
 
         if verify: self.verify() # Set this flag zero for "manual" data input
         # Mega-simple bin-by-bin significance estimate, for cross-checking

@@ -2,19 +2,55 @@
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 from collections.abc import Mapping
+import contextlib
+import time
+import functools
 import massminimize as mm
 from . import common as c
 
 #tmp
 id_only = False
 
-def neg2LogL(pars,const_pars,analyses,data,transform=None):
+#===================
+# Helper functions for optimizer test replacement
+# From examples at https://www.tensorflow.org/probability/examples/Optimizers_in_TensorFlow_Probability
+# ==================
+def make_val_and_grad_fn(value_fn):
+  @functools.wraps(value_fn)
+  def val_and_grad(x):
+    return tfp.math.value_and_gradient(value_fn, x)
+  return val_and_grad
+
+def np_value(tensor):
+  """Get numpy value out of possibly nested tuple of tensors."""
+  if isinstance(tensor, tuple):
+    return type(tensor)(*(np_value(t) for t in tensor))
+  else:
+    return tensor.numpy()
+
+def run(optimizer):
+  """Run an optimizer and measure it's evaluation time."""
+  optimizer()  # Warmup.
+  with timed_execution():
+    result = optimizer()
+  return np_value(result)
+
+@contextlib.contextmanager
+def timed_execution():
+  t0 = time.time()
+  yield
+  dt = time.time() - t0
+  print('Evaluation took: %f seconds' % dt)
+#=================
+
+def neg2logL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise
        TODO: parameter 'transform' feature not currently in use, probably doesn't work correctly
     """
-    #print("In neg2LogL:")
+    #print("In neg2logL:")
     #print("pars:", c.print_with_id(pars,id_only))
     #print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
@@ -26,36 +62,45 @@ def neg2LogL(pars,const_pars,analyses,data,transform=None):
     else:
         all_pars = c.deep_merge(const_pars,pars_t)
 
+    tf.print("pars:", pars)
+    tf.print("all_pars:", all_pars)
+
     # Sanity check: make sure parameters haven't become nan somehow
-    anynan = False
-    nanpar = ""
-    for a,par_dict in pars.items():
-        for p, val in par_dict.items():
-            if tf.math.reduce_any(tf.math.is_nan(val)):
-                anynan = True
-                nanpar += "\n    {0}::{1}".format(a,p)
-    if anynan:
-        msg = "NaNs detected in parameter arrays during optimization! The fit may have become unstable and wandering into an invalid region of parameter space; please check your analysis setup. Parameter arrays containing NaNs were:{0}".format(nanpar)
-        raise ValueError(msg)
+    # Doesn't seem to work with @tf.function decorator or inside tfp optimizer
+    # ----
+    # anynan = False
+    # nanpar = ""
+    # for a,par_dict in pars.items():
+    #     for p, val in par_dict.items():
+    #         if tf.math.reduce_any(tf.math.is_nan(val)):
+    #             anynan = True
+    #             nanpar += "\n    {0}::{1}".format(a,p)
+
+    # if anynan:
+    #     msg = "NaNs detected in parameter arrays during optimization! The fit may have become unstable and wandering into an invalid region of parameter space; please check your analysis setup. Parameter arrays containing NaNs were:{0}".format(nanpar)
+    #     tf.print("pars:", pars)
+    #     raise ValueError(msg)
+    # ----
 
     # Parameters will enter this function pre-scaled such that MLEs have variance ~1
     # So we need to set the pre-scaled flag for the JointDistribution constructor to
     # avoid applying the scaling a second time.
-    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
+    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True,in_tf_function=True)
     q = -2*joint.log_prob(data)
     #print("q:", q)
     #print("all_pars:", all_pars)
     #print("logL parts:", joint.log_prob_parts(data))
 
-    if tf.math.reduce_any(tf.math.is_nan(q)):
-        # Attempt to locate components generating the nans
-        component_logprobs = joint.log_prob_parts(data)
-        nan_components = ""
-        for comp,val in component_logprobs.items():
-            if tf.math.reduce_any(tf.math.is_nan(val)):
-                nan_components += "\n    {0}".format(comp)                
-        msg = "NaNs detect in result of neg2LogL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable! Components of the joint distribution whose log_prob contained nans were:" + nan_components
-        raise ValueError(msg)
+    # Can't do this in @tf.function either
+    # if tf.math.reduce_any(tf.math.is_nan(q)):
+    #     # Attempt to locate components generating the nans
+    #     component_logprobs = joint.log_prob_parts(data)
+    #     nan_components = ""
+    #     for comp,val in component_logprobs.items():
+    #         if tf.math.reduce_any(tf.math.is_nan(val)):
+    #             nan_components += "\n    {0}".format(comp)                
+    #     msg = "NaNs detect in result of neg2logL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable! Components of the joint distribution whose log_prob contained nans were:" + nan_components
+    #     raise ValueError(msg)
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
 
@@ -106,7 +151,7 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
 
     if all_exact_MLEs:
         if verbose: print("All starting MLE guesses are exact: skipping optimisation") 
-        total_loss, q, none, none = neg2LogL(free_pars,const_pars,**kwargs)
+        total_loss, q, none, none = neg2logL(free_pars,const_pars,**kwargs)
     else:
         # For analyses that have exact MLEs, we want to move those parameters from the
         # "free" category into the "fixed" category.
@@ -125,12 +170,46 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
                 enlarged_const_pars[a.name] = a_const_pars
 
         if verbose: print("Beginning optimisation")
-        #f = tf.function(mm.tools.func_partial(neg2LogL,**kwargs))
+        #f = tf.function(mm.tools.func_partial(neg2logL,**kwargs))
         kwargs["const_pars"] = enlarged_const_pars
-        f = mm.tools.func_partial(neg2LogL,**kwargs)
+
+        # Optimization with massminimize
+        # -------------------
+        f = mm.tools.func_partial(neg2logL,**kwargs)
         #print("About to enter optimizer")
         #print("pars:", c.print_with_id(reduced_free_pars,False))
         q, none, none = mm.optimize(reduced_free_pars, f, **opts)
+        # ------------------
+
+        # # Optimization with tfp optimizers
+        # # So far doesn't work. No idea why, the
+        # # errors are completely opaque.
+        # # --------------------
+
+        # # Stack initial parameter guesses into single tensor
+        # start_point = c.cat_pars(reduced_free_pars)
+
+        # # Slightly altered function signature required
+        # # Need to de-stack single tensor back into parameter dictionary
+        # @make_val_and_grad_fn
+        # def neg2logL_tfp(catted_pars):
+        #     pars = c.uncat_pars(catted_pars, pars_template=reduced_free_pars)
+        #     total_loss, q, x1, x2 = neg2logL(pars,**kwargs)
+        #     return q
+
+        # # Function to run optimizer
+        # @tf.function
+        # def optimizer():
+        #    return tfp.optimizer.lbfgs_minimize(
+        #       neg2logL_tfp, initial_position=start_point,
+        #       stopping_condition=tfp.optimizer.converged_all,
+        #       max_iterations=100,
+        #       tolerance=1e-8)
+ 
+        # results = run(optimizer)
+        # print("results:", results)
+        # quit()
+        # # --------------------
 
     # Rebuild distribution object with fitted parameters for output to user
     if transform is not None:
@@ -160,7 +239,7 @@ class JointDistribution(tfd.JointDistributionNamed):
              objects as the 'analyses'. Needs to be generalised. 
     """
    
-    def __init__(self, analyses, pars=None, pre_scaled_pars=False):
+    def __init__(self, analyses, pars=None, pre_scaled_pars=False, in_tf_function=False):
         """ 
         :param analyses: list of analysis-like objects to be combined
         :type analyses: list
@@ -172,29 +251,36 @@ class JointDistribution(tfd.JointDistributionNamed):
                 If False, all parameters are conventionally (i.e. not) scaled, and
                 require scaling internally.
         :type pre_scaled_pars: bool, optional
+        :param in_tf_function: If True, assumes this object is being used inside a tf.function.
+                Disables certain operations that cannot run inside a tf.function, for example
+                certain boolean checks and exception handling. Basically removes some sanity
+                checking etc.
+        :type in_tf_function: bool, optional
         """
         #print("In JointDistribution constructor (pre_scaled_pars={0})".format(pre_scaled_pars))
          
         self.analyses = {a.name: a for a in analyses}
         self.Osamples = {}
         for a in self.analyses.values():
-           self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
+            self.Osamples.update(c.add_prefix(a.name,a.get_observed_samples()))
         if pars is not None:
             # Convert parameters to TensorFlow constants, if not already TensorFlow objects
             #print("pars:", c.print_with_id(pars,id_only))
             pars_tf = c.convert_to_TF_constants(pars,ignore_variables=True)
             #print("pars_tf:", c.print_with_id(pars_tf,id_only))
-            # Check that parameters are not NaN
-            anynan = False
-            nanpar = ""
-            for a,par_dict in pars_tf.items():
-                for p, val in par_dict.items():
-                    if tf.math.reduce_any(tf.math.is_nan(val)):
-                        anynan = True
-                        nanpar += "\n    {0}::{1}".format(a,p)
-            if anynan:
-                msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
-                raise ValueError(msg)
+
+            if not in_tf_function:
+                # Check that parameters are not NaN
+                anynan = False
+                nanpar = ""
+                for a,par_dict in pars_tf.items():
+                    for p, val in par_dict.items():
+                        if tf.math.reduce_any(tf.math.is_nan(val)):
+                            anynan = True
+                            nanpar += "\n    {0}::{1}".format(a,p)
+                if anynan:
+                    msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
+                    raise ValueError(msg)
             self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
             #print("self.pars:", c.print_with_id(self.pars,id_only))
             dists = {} 
@@ -436,43 +522,6 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_dict["fixed"]  = self.descale_pars(const_pars)
         return q, joint_fitted, par_dict 
 
-    def cat_pars(self,pars):
-        """Stack tensorflow parameters in known order"""
-        parlist = []
-        maxdims = {}
-        for ka,a in pars.items():
-            for kp,p in a.items():
-                parlist += [p]
-                i = -1
-                for d in p.shape[::-1]:
-                    if i not in maxdims.keys() or maxdims[i]<d: maxdims[i] = d
-                    i-=1
-        maxshape = [None for i in range(len(maxdims))]
-        for i,d in maxdims.items():
-            maxshape[i] = d
-
-        # Attempt to broadcast all inputs to same shape
-        matched_parlist = []
-        bcast = tf.broadcast_to(tf.constant(np.ones([1 for d in range(len(maxdims))]),dtype=c.TFdtype),maxshape)
-        for p in parlist:
-            matched_parlist += [p*bcast]
-        return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
-
-    def uncat_pars(self,catted_pars,pars_template=None):
-        """De-stack tensorflow parameters back into separate variables of
-           shapes know to each analysis. Assumes stacked_pars are of the
-           same structure as pars_template"""
-        if pars_template is None: pars_template = self.pars
-        pars = {}
-        i = 0
-        for ka,a in pars_template.items():
-            pars[ka] = {}
-            for kp,p in a.items():
-                N = p.shape[-1]
-                pars[ka][kp] = catted_pars[...,i:i+N]
-                i+=N
-        return pars
-
     def Hessian(self,pars,samples):
         """Obtain Hessian matrix (and grad) at input parameter point
            Make sure to use de-scaled parameters as input!"""
@@ -492,7 +541,7 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        catted_pars = self.cat_pars(free_pars)
+        catted_pars = c.cat_pars(free_pars)
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
         ##     print("inpars:", inpars)
@@ -513,7 +562,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             # get log_prob for all component dists "manually"
             # Avoids confusion about parameters getting copied and
             # breaking TF graph connections etc.
-            inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
+            inpars = c.uncat_pars(catted_pars,self.pars) # need to unstack for use in each analysis
             # merge with const parameters
             all_inpars = c.deep_merge(inpars,const_pars)
             scaled_inpars = self.scale_pars(all_inpars)
@@ -647,8 +696,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
                 parlist += [signal[ka][kp]]
         s = tf.constant(tf.concat(parlist,axis=-1),name="all_signal_parameters")
-        s_0 = self.cat_pars(interest) # stacked interest parameter values at expansion point
-        theta_0 = self.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
+        s_0 = c.cat_pars(interest) # stacked interest parameter values at expansion point
+        theta_0 = c.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
         #print("theta_0.shape:",theta_0.shape)
         #print("A.shape:",A.shape)
         #print("B.shape:",B.shape)
@@ -657,7 +706,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         # de-stack theta_prof
-        theta_prof_dict = self.uncat_pars(theta_prof,pars_template=nuisance)
+        theta_prof_dict = c.uncat_pars(theta_prof,pars_template=nuisance)
         #print("theta_prof_dict:", theta_prof_dict)
         #print("signal:", signal)
         # Compute -2*log_prop
