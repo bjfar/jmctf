@@ -695,6 +695,7 @@ class JointDistribution(tfd.JointDistributionNamed):
            determine the profiled nuisance parameter values. 
            Should be used after pars are fitted to the global best fit for best
            expansion."""
+        print("quad_loglike_f; samples:", samples)
         A, B, interest_p, nuisance_p = self.quad_loglike_prep(samples)
         f = mm.tools.func_partial(self.neg2loglike_quad,A=A,B=B,interest=interest_p,nuisance=nuisance_p,samples=samples)
         return f
@@ -737,6 +738,6 @@ class JointDistribution(tfd.JointDistributionNamed):
         q = -2*joint.log_prob(samples)
         print("q.shape:", q.shape)
         print("samples:", samples)
-        quit()
+        #quit()
         return q
 

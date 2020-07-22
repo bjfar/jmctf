@@ -505,10 +505,68 @@ class LEECorrectorMaster(LEECorrectorBase):
             if rem!=0 and i==Nbatches: size = rem
             else: size = Nchunk
             comb_neg2logLs = None
-            alt_chunk, altIDs = alt_hyp_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+            r = alt_hyp_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+
+            # Check that user-supplied alt_hyp_gen function gave us
+            # usable input. Since this is user-supplied we do particularly
+            # careful checking
+            # ---------------------------------
+            gen_msg1 = "User supplied alternate hypothesis generator class ('alt_hyp_gen' argument) did not produce valid hypothesis data!"
+            gen_msg2 = "The hypothesis dictionary should be of the structure {<analysis_name>: {<parameter_name>: <parameter_values>}}, where <parameter_values> is a 2D array of values for each parameters, with dim 0 being separate hypotheses, and dim 1 being entries of vector parameters (but even scalar parameter should be given this dimension).\nThe ID array should simply be a 1D array of ID numbers that uniquely identify each hypothesis given in the corresponding entries of the hypothesis dictionary."
+
+            # Check that dict, ID tuple is returned
+            try:
+                alt_chunk, altIDs = r
+            except ValueError as e:
+                msg = gen_msg1 + " The 'next' method did not return a (dictionary,array) tuple (see rest of error for more information)\n" + gen_msg2
+                raise ValueError(msg) from e
+                
+            # Check that dict part of tuple is a dict
+            if not isinstance(alt_chunk, dict):
+                msg = gen_msg1 + " The 'next' method did not return a (dictionary,array) tuple (the first member of the tuple was not a dictionary).\n"+gen_msg2
+                raise ValueError(gen_msg)
+
+            # Check that dict has correct structure
+            gen_msg3 = "The dictionary returned by the 'next' method does not have the correct structure. It should be a dictionary of parameter dictionaries"
+            hyp_size = None # Size of hypothesis dimension
+            for a,pars in alt_chunk.items():
+                if not isinstance(alt_chunk[a], dict):
+                    msg = gen_msg1 + " " + gen_msg3 + ", but the values of the outer dict were not dicts." + gen_msg2
+                    raise ValueError(msg)
+                for p, vals in pars.items():
+                    try:
+                        vals.shape
+                    except AttributeError as e:
+                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter \"values\" given for parameter {0} in analysis {1} could not be interpreted as arrays (they did not have a 'shape' method).".format(p,a)
+                        raise ValueError(msg) from e
+                    if len(vals.shape)!=2:
+                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given are not the right shape! They should be 2D (see description below) but shape of {0} parameter in {1} analysis was {2}".format(p,a,vals.shape)
+                        raise ValueError(msg)
+                    if hyp_size is None: hyp_size = vals.shape[0]
+                    elif hyp_size != vals.shape[0]:
+                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given have inconsistent shapes! They should be 2D (see description below), but number of hypotheses returned in array for parameter {0} in analysis {1} was {2} (previous parameter arrays contained {3} hypotheses)".format(p,a,vals.shape[0],hyp_size)
+                        raise ValueError(msg)
+ 
+            # Check that ID array is valid
+            try:
+                len(altIDs)
+            except TypeError:
+                msg = gen_msg1 + ". The 'next' method did not return a (dictionary,array) tuple (the 'array' item had no 'len' property so cannot be interpreted as an array. It needs to be a 1D list/array giving unique ID numbers)"
+                raise ValueError(msg)
+            if len(altIDs) != hyp_size:
+                msg = gen_msg1 + ". The array in the (dict,array) tuple returned by the 'next' method did not have a length consistent with the parameters given in 'dict'. From the dict it was inferred that there are {0} hypotheses in this chunk, however the ID array has length {1}".format(hyp_size,len(altIDs))
+                raise ValueError(msg)
+            # ---------------------------------
+
+            # Input validated, onto the analysis
+
             for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
                 #print("running quad:",name)
                 neg2logLs = quad({name: alt_chunk[name]})
+                if len(neg2logLs.shape)!=2:
+                    msg = "Shape of neg2logLs array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=hypotheses, dim[1]=events).".format(name,neg2logLs.shape)
+                    raise ValueError(msg)
+
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
                 a.record_alternate_logLs(neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
@@ -714,10 +772,10 @@ class LEECorrectorMaster(LEECorrectorBase):
     def add_to_database(self):
         pass
 
-    def compute_quad(self,data):
-        """Compute quadratic approximations of profile likelihood for a set of
-           data"""
-        pass
+    #def compute_quad(self,data):
+    #    """Compute quadratic approximations of profile likelihood for a set of
+    #       data"""
+    #    pass
 
 class LEECorrectorAnalysis(LEECorrectorBase):
     """A class to wrap up a SINGLE analysis with connection to output sql database,
@@ -974,6 +1032,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            set of events, expanding around the supplied nuisance parameter point with
            the null hypothesis"""
         joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
+        print("self.null_hyp:",self.null_hyp)
         quadf = joint_fitted_b.quad_loglike_f(events)
 
         return quadf 
@@ -990,6 +1049,11 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            """
         if Ltype != 'quad':
             raise ValueError("Sorry, alternate hypothesis fit result recording has so far only been implemented for the 'quadratic approximation' results.")
+
+        # Sanity check input shapes
+        if len(neg2logLs.shape) != 2:
+            msg = "neg2logLs supplied for recording are not 2D! Dim 0 should correspond to trials/events/pseudoexperiments/samples, while dim 1 should correspond to 'alternate hypotheses'. Any other dimensions are not valid (e.g. alternate hypothesis arrays must be flattened to 1D). Shape was: {0}".format(neg2logLs.shape)
+            raise ValueError(msg)
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
             observed_mode = True
