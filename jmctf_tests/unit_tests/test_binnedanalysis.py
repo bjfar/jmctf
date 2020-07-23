@@ -28,13 +28,13 @@ def get_three_hypotheses():
                                   (0.,0.)],dtype=c.TFdtype)
             }
     return pars
+# -------------------------------------------------------
 
 def get_model():
     obj = get_obj()
     pars = get_single_hypothesis()
     model = obj.tensorflow_model(pars)
     return model
-# -------------------------------------------------------
 
 def test_BinnedAnalysis_init():
     obj = get_obj() 
