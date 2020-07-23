@@ -261,7 +261,10 @@ def uncat_pars(catted_pars,pars_template):
     for ka,a in pars_template.items():
         pars[ka] = {}
         for kp,p in a.items():
-            N = p.shape[-1]
+            if p.shape == ():
+                N = 1 # Even scalars still take up one slot
+            else:
+                N = p.shape[-1]
             pars[ka][kp] = catted_pars[...,i:i+N]
             i+=N
     return pars

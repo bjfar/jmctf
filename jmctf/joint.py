@@ -562,6 +562,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             # get log_prob for all component dists "manually"
             # Avoids confusion about parameters getting copied and
             # breaking TF graph connections etc.
+            print("catted_pars:", catted_pars)
+            print("free_pars:", free_pars)
             inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
             print("inpars:", inpars)
             # merge with const parameters
@@ -604,11 +606,11 @@ class JointDistribution(tfd.JointDistributionNamed):
             nuisance_i[ka] = {}
             for kp,p in a.items():
                 if kp in nuisance[ka].keys():
-                    N = p.shape[-1]
+                    N = p.shape[-1] if p.shape!=() else 1
                     nuisance_p[ka][kp] = p
                     nuisance_i[ka][kp] = (i, N)
                 elif kp in interest[ka].keys():
-                    N = p.shape[-1]
+                    N = p.shape[-1] if p.shape!=() else 1
                     interest_p[ka][kp] = p
                     interest_i[ka][kp] = (i, N)
                 elif kp in fixed[ka].keys():
@@ -725,7 +727,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("A:", A)
         #print("B:", B)
         #print("s:", s)
-        #print("s_0:", s_0)
+        print("s_0:", s_0)
         theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         print("theta_prof.shape:", theta_prof.shape)

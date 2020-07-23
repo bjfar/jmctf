@@ -40,8 +40,8 @@ class SigGen:
 
 import tensorflow as tf
 import jmctf.common as c
-null_hyp = {"Test normal": {"mu": [[0]]}}
-alt_hyp = {"Test normal": {"mu": np.array([mu]).T}} 
+null_hyp = {"Test normal": {"mu": 0}}
+alt_hyp = {"Test normal": {"mu": mu}} 
 DOF = 1
 
 from jmctf.LEE import LEECorrectorMaster

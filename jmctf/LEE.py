@@ -512,7 +512,7 @@ class LEECorrectorMaster(LEECorrectorBase):
             # careful checking
             # ---------------------------------
             gen_msg1 = "User supplied alternate hypothesis generator class ('alt_hyp_gen' argument) did not produce valid hypothesis data!"
-            gen_msg2 = "The hypothesis dictionary should be of the structure {<analysis_name>: {<parameter_name>: <parameter_values>}}, where <parameter_values> is a 2D array of values for each parameters, with dim 0 being separate hypotheses, and dim 1 being entries of vector parameters (but even scalar parameter should be given this dimension).\nThe ID array should simply be a 1D array of ID numbers that uniquely identify each hypothesis given in the corresponding entries of the hypothesis dictionary."
+            gen_msg2 = "The hypothesis dictionary should be of the structure {<analysis_name>: {<parameter_name>: <parameter_values>}}, where <parameter_values> is a 1 or 2D array of values for each parameters, with dim 0 being separate hypotheses, and dim 1 being entries of vector parameters (scalar parameters may omit this dimension).\nThe ID array should simply be a 1D array of ID numbers that uniquely identify each hypothesis given in the corresponding entries of the hypothesis dictionary."
 
             # Check that dict, ID tuple is returned
             try:
@@ -539,12 +539,12 @@ class LEECorrectorMaster(LEECorrectorBase):
                     except AttributeError as e:
                         msg = gen_msg1 + " " + gen_msg3 + ", however the parameter \"values\" given for parameter {0} in analysis {1} could not be interpreted as arrays (they did not have a 'shape' method).".format(p,a)
                         raise ValueError(msg) from e
-                    if len(vals.shape)!=2:
-                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given are not the right shape! They should be 2D (see description below) but shape of {0} parameter in {1} analysis was {2}".format(p,a,vals.shape)
+                    if len(vals.shape)!=1 and len(vals.shape)!=2:
+                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given are not the right shape! They should be 1/2D (see description below) but shape of {0} parameter in {1} analysis was {2}".format(p,a,vals.shape)
                         raise ValueError(msg)
                     if hyp_size is None: hyp_size = vals.shape[0]
                     elif hyp_size != vals.shape[0]:
-                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given have inconsistent shapes! They should be 2D (see description below), but number of hypotheses returned in array for parameter {0} in analysis {1} was {2} (previous parameter arrays contained {3} hypotheses)".format(p,a,vals.shape[0],hyp_size)
+                        msg = gen_msg1 + " " + gen_msg3 + ", however the parameter values given have inconsistent shapes! They should be 1/2D (see description below), but number of hypotheses returned in array for parameter {0} in analysis {1} was {2} (previous parameter arrays contained {3} hypotheses)".format(p,a,vals.shape[0],hyp_size)
                         raise ValueError(msg)
  
             # Check that ID array is valid
