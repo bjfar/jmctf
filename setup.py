@@ -8,5 +8,5 @@ setup(name='jmctf',
       author='Ben Farmer',
       author_email='ben.farmer@gmail.com',
       url= 'https://github.com/bjfar/jmctf',
-      packages=['jmctf','tests'],
+      packages=['jmctf','jmctf_tests'],
      )
