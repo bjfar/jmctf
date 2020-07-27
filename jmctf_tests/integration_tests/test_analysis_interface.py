@@ -6,32 +6,21 @@ import pytest
 
 from tensorflow_probability import distributions as tfd
 from jmctf import JointDistribution
-from jmctf_tests.analysis_class_register import analysis_tests
-
-id_list = [name for name,a in analysis_tests]
-
-def get_all_obj():
-    return [a.get_obj() for name,a in analysis_tests]
-
-def get_test_hypothesis():
-    return [a.get_single_hypothesis() for name,a in analysis_tests]
-
-def get_hypothesis_lists():
-    return [a.get_three_hypotheses() for name,a in analysis_tests]
+from jmctf_tests.analysis_class_register import get_id_list, get_all_obj, get_test_hypothesis, get_hypothesis_lists
 
 # Fixture to create just analysis objects
 @pytest.fixture(scope="module", 
                 params=get_all_obj(),
-                ids = id_list)
+                ids = get_id_list())
 def analysis(request):
     yield request.param
 
 # Fixture to create analysis objects and provide test parameters to use with them 
 @pytest.fixture(scope="module", 
-                params=list(zip(get_all_obj(),get_test_hypothesis()))
-                      +list(zip(get_all_obj(),get_hypothesis_lists())),
-                ids = [name + " (single hypothesis)" for name in id_list]
-                     +[name + " (hypothesis list)" for name in id_list])
+                params=list(zip(get_all_obj().values(),get_test_hypothesis().values()))
+                      +list(zip(get_all_obj().values(),get_hypothesis_lists().values())),
+                ids = [name + " (single hypothesis)" for name in get_id_list()]
+                     +[name + " (hypothesis list)" for name in get_id_list()])
 def analysis_and_parameters(request):
     analysis, parameters = request.param
     yield (analysis, parameters)
@@ -60,8 +49,8 @@ def test_tensorflow_models(model):
 def do_for_all_analyses(test_func):
     @pytest.mark.parametrize(
         "analysis,single_hypothesis,many_hypotheses",
-        zip(get_all_obj(),get_test_hypothesis(),get_hypothesis_lists()),
-        ids = id_list
+        zip(get_all_obj().values(),get_test_hypothesis().values(),get_hypothesis_lists().values()),
+        ids = get_id_list()
         )
     def wrapper(analysis,single_hypothesis,many_hypotheses):
         test_func(analysis,single_hypothesis,many_hypotheses)

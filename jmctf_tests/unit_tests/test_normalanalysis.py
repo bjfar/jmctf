@@ -22,7 +22,7 @@ def get_single_hypothesis():
 def get_three_hypotheses():
     pars = {'mu': tf.constant([0.,1.,2.],dtype=c.TFdtype),
             'theta': tf.constant([0.,0.,0.],dtype=c.TFdtype),
-            'sigma_t': tf.constant([0.,0.5,1.],dtype=c.TFdtype)}
+            'sigma_t': tf.constant([1e-10,0.5,1.],dtype=c.TFdtype)} # Currently 0 doesn't work due to divide by zero
     return pars
 # -------------------------------------------------------
 

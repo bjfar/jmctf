@@ -526,7 +526,23 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Obtain Hessian matrix (and grad) at input parameter point
            Make sure to use de-scaled parameters as input!"""
 
-        # Separate "const" parameters
+        # Check parameter shapes. We should only compute the Hessian for
+        # one set of parameters at a time (but can have many samples)
+        #print("samples:", samples)
+        #for name,x in samples.items():
+        #    if x.shape[0]!=1:
+        #        msg = "Multiple samples detected in input to Hessian calculation! Please only compute Hessians for one sample at a time. (shape of input sample {0} was {1}; first dimension must be 1.".format(name,x.shape)
+        #        raise ValueError(msg)
+
+        for a,p in pars.items():
+            for name,par in p.items():
+                if par.shape!=() and len(par.shape)>1:
+                    if par.shape[0]!=1:
+                        msg = "Multiple independent hypotheses detected in parameter input to Hessian calculation! Please only compute Hessians for one parameter point at a time. (shape of parameter {0} for analysis {1} was {2}; first dimension must be 1 when multiple dimensions exist".format(name,a,par.shape)
+                        raise ValueError(msg)
+
+        # Separate "const" parameters, and also adjust shapes of parameters
+        # to make life easier later
         free_pars = {}
         const_pars = {}
         const_par_names = self.identify_const_parameters()
@@ -557,36 +573,62 @@ class JointDistribution(tfd.JointDistributionNamed):
         ##     q = -2*joint.log_prob(samples)
         ##     print("q:", q)
         ##     grads = tape.gradient(q, catted_pars)
-        with tf.GradientTape(persistent=True) as tape:
-            # Don't need to go via JointDistribution, can just
-            # get log_prob for all component dists "manually"
-            # Avoids confusion about parameters getting copied and
-            # breaking TF graph connections etc.
-            print("catted_pars:", catted_pars)
-            print("free_pars:", free_pars)
-            inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
-            print("inpars:", inpars)
-            # merge with const parameters
-            all_inpars = c.deep_merge(inpars,const_pars)
-            scaled_inpars = self.scale_pars(all_inpars)
-            q = 0
-            for a in self.analyses.values():
-                d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
-                for dist_name, dist in d.items():
-                    q += -2*dist.log_prob(samples[dist_name])
-            grads = tape.gradient(q, catted_pars)
-            print("catted_pars:", catted_pars)
-            print("all_inpars:", all_inpars)
-            print("scaled_inpars:", scaled_inpars)
-            print("q:", q)
-            print("grads:", grads)
-        hessians = tape.batch_jacobian(grads, catted_pars) # batch_jacobian takes first (the sample) dimensions as independent for much better efficiency
-        print("H:",hessians)
-        # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses. TODO: throw better error if dimension sizes not 1
+
+        # TODO:
+        # Unfortunately it seems like there isn't currently a way to compute
+        # gradients/hessians independently for lots of samples at once. So
+        # will need to loop over the samples. Hopefully it isn't absurdly slow.
+        # Could try to speed it up by putting inside a tf.function and using a
+        # pre-built graph
+        hessian_list = []
+        grad_list = []
+        for x in c.iterate_samples(samples):
+            with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
+                tape.watch(catted_pars)
+                # Don't need to go via JointDistribution, can just
+                # get log_prob for all component dists "manually"
+                # Avoids confusion about parameters getting copied and
+                # breaking TF graph connections etc.
+                # print("catted_pars:", catted_pars)
+                # print("free_pars:", free_pars)
+                inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
+                # print("inpars:", inpars)
+                # merge with const parameters
+                all_inpars = c.deep_merge(inpars,const_pars)
+                scaled_inpars = self.scale_pars(all_inpars)
+                q = 0
+                for a in self.analyses.values():
+                    d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
+                    for dist_name, dist in d.items():
+                        q += -2*dist.log_prob(x[dist_name])
+                grads = tape.gradient(q, catted_pars)
+                #grads = tape.jacobian(q, catted_pars)
+                #grads = tape.batch_jacobian(q, catted_pars)
+                #grads = tape.hessians(q, catted_pars)
+                # print("samples:", samples)
+                # print("all_inpars:", all_inpars)
+                # print("scaled_inpars:", scaled_inpars)
+                # print("catted_pars:", catted_pars)
+                # print("q:", q)
+                # print("grads:", grads)
+            # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
+            #hessians = tape.batch_jacobian(grads, catted_pars) 
+            #...but we are only allowing one sample anyway, so can just do normal jacobian
+            hessian = tape.jacobian(grads, catted_pars)
+            #print("H:",hessians)
+            grad_list += [grads]
+            hessian_list += [hessian]
+        print("hessian_list:", hessian_list)
+        grads = tf.stack(grad_list,axis=0)
+        hessians = tf.stack(hessian_list,axis=0)
+      
+        # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses.
         grads_out = tf.squeeze(grads,axis=[-2])
         hessians_out = tf.squeeze(hessians,axis=[-2,-4])
-        #print("g_out:",grads_out)
-        #print("H_out:",hessians_out)
+        #grads_out = grads
+        #hessians_out = hessians
+        print("g_out:",grads_out)
+        print("H_out:",hessians_out)
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):

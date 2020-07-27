@@ -234,7 +234,15 @@ def cat_pars(pars):
     parlist = []
     maxdims = {}
     for ka,a in pars.items():
-        for kp,p in a.items():
+        for kp,p_in in a.items():
+            # Basically we emulated numpy atleast_2d here
+            if p_in.shape==():
+                # Corner case for scalar tensors
+                p = tf.expand_dims(tf.expand_dims(p_in,axis=0),axis=0)
+            elif len(p_in.shape)==1:
+                p = tf.expand_dims(p_in,axis=1)                
+            else:
+                p = p_in
             parlist += [p]
             i = -1
             for d in p.shape[::-1]:
@@ -261,11 +269,33 @@ def uncat_pars(catted_pars,pars_template):
     for ka,a in pars_template.items():
         pars[ka] = {}
         for kp,p in a.items():
-            if p.shape == ():
+            # We always stack to at least 2D, so need to undo this for some cases
+            if p.shape==():
                 N = 1 # Even scalars still take up one slot
+                pars[ka][kp] = tf.squeeze(catted_pars[...,i:i+N],axis=[0,1])
+            elif len(p.shape)==1:
+                N = 1 # Assume there is an implicit singleton inner dimension
+                pars[ka][kp] = tf.squeeze(catted_pars[...,i:i+N],axis=[0])        
             else:
                 N = p.shape[-1]
-            pars[ka][kp] = catted_pars[...,i:i+N]
+                pars[ka][kp] = catted_pars[...,i:i+N]
             i+=N
     return pars
 
+def extract_sample(sample_dict,i):
+    """Extract ith sample from a dictionary of samples"""
+    out = {}
+    for name,x in sample_dict.items():
+        out[name] = x[i]
+    return out
+
+def iterate_samples(sample_dict):
+    """Iterate through samples in a dictionary of samples"""
+    i = 0
+    N = list(sample_dict.values())[0].shape[0]
+    while i<N:
+        out = {}
+        for name,x in sample_dict.items():
+            out[name] = x[i]
+        yield out
+        i+=1
