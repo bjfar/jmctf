@@ -541,6 +541,20 @@ class JointDistribution(tfd.JointDistributionNamed):
                         msg = "Multiple independent hypotheses detected in parameter input to Hessian calculation! Please only compute Hessians for one parameter point at a time. (shape of parameter {0} for analysis {1} was {2}; first dimension must be 1 when multiple dimensions exist".format(name,a,par.shape)
                         raise ValueError(msg)
 
+        # Need to adjust sample shapes to make Hessian output nicer
+        # Squeeze out singleton dimensions.
+        #squeezed_samples = {} 
+        #for name,x in samples.items():
+        #    singletons = []
+        #    for i,d in enumerate(x.shape):
+        #        if i!=0 and d==1: # Don't squeeze the sample dimension even if there is only one sample; we have to iterate over it later.
+        #            singletons += [i]
+        #    if singletons != []:
+        #        squeezed_samples[name] = tf.squeeze(x,axis=singletons)            
+        #    else:
+        #        squeezed_samples[name] = x
+        squeezed_samples = samples
+ 
         # Separate "const" parameters, and also adjust shapes of parameters
         # to make life easier later
         free_pars = {}
@@ -557,7 +571,8 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        catted_pars = tf.Variable(c.cat_pars(free_pars)) # Our input variables to be traced
+        input_pars = tf.Variable(tf.squeeze(c.cat_pars(free_pars),axis=0)) # Our input variables to be traced. Squeezed for better Hessian shape.
+
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
         ##     print("inpars:", inpars)
@@ -582,15 +597,17 @@ class JointDistribution(tfd.JointDistributionNamed):
         # pre-built graph
         hessian_list = []
         grad_list = []
-        for x in c.iterate_samples(samples):
+        for x in c.iterate_samples(squeezed_samples):
             with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
-                tape.watch(catted_pars)
+                tape.watch(input_pars)
                 # Don't need to go via JointDistribution, can just
                 # get log_prob for all component dists "manually"
                 # Avoids confusion about parameters getting copied and
                 # breaking TF graph connections etc.
-                # print("catted_pars:", catted_pars)
-                # print("free_pars:", free_pars)
+                print("free_pars:", free_pars)
+                catted_pars = tf.expand_dims(input_pars,axis=0) # Put singleton hypothesis axis back in for de-catting later
+                print("input_pars:", input_pars)
+                print("catted_pars:", catted_pars)
                 inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
                 # print("inpars:", inpars)
                 # merge with const parameters
@@ -614,7 +631,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
             #hessians = tape.batch_jacobian(grads, catted_pars) 
             #...but we are only allowing one sample anyway, so can just do normal jacobian
-            hessian = tape.jacobian(grads, catted_pars)
+            hessian = tape.jacobian(grads, input_pars)
             #print("H:",hessians)
             grad_list += [grads]
             hessian_list += [hessian]
@@ -623,10 +640,12 @@ class JointDistribution(tfd.JointDistributionNamed):
         hessians = tf.stack(hessian_list,axis=0)
       
         # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses.
-        grads_out = tf.squeeze(grads,axis=[-2])
-        hessians_out = tf.squeeze(hessians,axis=[-2,-4])
-        #grads_out = grads
-        #hessians_out = hessians
+        #grads_out = tf.squeeze(grads,axis=[-2])
+        #hessians_out = tf.squeeze(hessians,axis=[-2,-4])
+        # ... not very robust. Need to instead fix up shapes of input parameters I think.
+        grads_out = grads
+        hessians_out = hessians
+
         print("g_out:",grads_out)
         print("H_out:",hessians_out)
         return hessians_out, grads_out
