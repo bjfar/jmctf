@@ -338,12 +338,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Prepare default nuisance parameters and return scaled signal and nuisance parameters for each analysis
            (scaled such that MLE's in this parameterisation have
            variance of approx. 1"""
-        all_pars = {}
-        #print("in prepare_pars; pars:",pars)
+
+        # First check whether all expected parameters are found
         for a in self.analyses.values():
             if a.name not in pars.keys(): raise KeyError("Parameters for analysis {0} not found!".format(a.name))
-            #print("  pars[{0}] = {1}".format(a.name,pars[a.name]))
-            # Apply scaling if not already done
+ 
+        all_pars_1 = {}
+        # Next check whether parameters are pre-scaled and whether they are already TensorFlow objects
+        for a in self.analyses.values():
             # It is an error to scale TensorFlow 'Variable' objects! These
             # should not be used as input unless it is occurring internally in
             # the TensorFlow optimizer. In which case the parameters should already
@@ -352,13 +354,32 @@ class JointDistribution(tfd.JointDistributionNamed):
                 p = pars[a.name]
             else:
                 try:
-                    p_tf = c.convert_to_TF_constants(pars[a.name],ignore_variables=False)
+                    p = c.convert_to_TF_constants(pars[a.name],ignore_variables=False)
                 except TypeError as e:
                     msg = "TensorFlow 'Variable' objects found in the input parameter dictionary for analysis {0}, but parameters are not flagged as 'pre-scaled'! Please do not use this type for input to JointDistribution parameters, as it is reserved for internal use with the TensorFlow optimizer routines, and needs to be controlled to maintain the correct graph relationships between input parameters and the log_prob output of the JointDistribution. Any other list/tuple/array type structure should be used instead."  
                     raise TypeError(msg) from e
-                p = a.scale_pars(p_tf)
+            all_pars_1[a.name] = p
 
-            # Throw warning about discarded parameters, in case user messed up the input
+        # Next, apply shape changes if needed
+        all_pars_2, squeezed = c.prepare_par_shapes(all_pars_1)
+
+        # Next, add the nuisance parameters in if needed, and check their shapes too
+        # (but this time the squeezing of axis=0 only occurs if it did for the user parameters)
+        all_pars_3 = {}
+        for a in self.analyses.values():
+            all_pars_3[a.name] = a.add_default_nuisance(all_pars_2[a.name])
+        all_pars_4, squeezed_2 = c.prepare_par_shapes(all_pars_3, squeeze=squeezed)
+
+        # Finally, do scaling if needed
+        all_pars_out = {}
+        if not pre_scaled_pars:
+            for a in self.analyses.values():
+                all_pars_out[a.name] = a.scale_pars(all_pars_4[a.name])
+        else:
+            all_pars_out = all_pars_4
+
+        # Throw warning about discarded parameters, in case user messed up the input
+        for a in self.analyses.values():
             missing = []
             for par in pars[a.name].keys():
                 if par not in p.keys():
@@ -366,11 +387,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             if len(missing)>0:
                 msg = "***WARNING: the following unrecognised parameters were found in the parameter dictionary for analysis {0}: {1}\nThis is permitted, but please make sure it wasn't an accident.".format(a.name, missing)
                 print(msg)
-            #print("  p: ",p)
-            # Add default values for nuisance parameters if not provided
-            all_pars[a.name] = a.add_default_nuisance(p)
-        #print("   all_pars:", all_pars)
-        return all_pars 
+
+        return all_pars_out
 
     def descale_pars(self,pars):
         """Remove scaling from parameters. Assumes they have all been scaled and require de-scaling."""
@@ -543,17 +561,7 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Need to adjust sample shapes to make Hessian output nicer
         # Squeeze out singleton dimensions.
-        #squeezed_samples = {} 
-        #for name,x in samples.items():
-        #    singletons = []
-        #    for i,d in enumerate(x.shape):
-        #        if i!=0 and d==1: # Don't squeeze the sample dimension even if there is only one sample; we have to iterate over it later.
-        #            singletons += [i]
-        #    if singletons != []:
-        #        squeezed_samples[name] = tf.squeeze(x,axis=singletons)            
-        #    else:
-        #        squeezed_samples[name] = x
-        squeezed_samples = samples
+        print("Hessian: samples:", samples)
  
         # Separate "const" parameters, and also adjust shapes of parameters
         # to make life easier later
@@ -569,9 +577,14 @@ class JointDistribution(tfd.JointDistributionNamed):
                 else:
                     free_pars[a][name] = v
 
+        # Make sure shape of const parameters is correct
+        const_pars0 = c.extract_ith(c.atleast_2d(const_pars),0)
+
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        input_pars = tf.Variable(tf.squeeze(c.cat_pars(free_pars),axis=0)) # Our input variables to be traced. Squeezed for better Hessian shape.
+        # "Hypothesis" axis squeezed to avoid extra singleton dimensions in final Hessian
+        # (we are only allowed one hypothesis at a time anyway)
+        input_pars = tf.Variable(c.cat_pars_2d(free_pars,remove_axis0=True)) # Our input variables to be traced. Singleton axis 0 removed for better Hessian shape.
 
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
@@ -597,7 +610,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # pre-built graph
         hessian_list = []
         grad_list = []
-        for x in c.iterate_samples(squeezed_samples):
+        for x in c.iterate_samples(samples):
             with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
                 tape.watch(input_pars)
                 # Don't need to go via JointDistribution, can just
@@ -608,15 +621,20 @@ class JointDistribution(tfd.JointDistributionNamed):
                 catted_pars = tf.expand_dims(input_pars,axis=0) # Put singleton hypothesis axis back in for de-catting later
                 print("input_pars:", input_pars)
                 print("catted_pars:", catted_pars)
-                inpars = c.uncat_pars(catted_pars,free_pars) # need to unstack for use in each analysis
+                inpars = c.uncat_pars_2d(catted_pars,free_pars) # need to unstack for use in each analysis
+                # Extract 0th hypothesis from unstacked pars
+                # Basically removes 0th dimension again to improve generated samples shape and thus Hessian shape.
+                inpars0 = c.extract_ith(inpars,0) 
+             
                 # print("inpars:", inpars)
                 # merge with const parameters
-                all_inpars = c.deep_merge(inpars,const_pars)
+                all_inpars = c.deep_merge(inpars0,const_pars0)
                 scaled_inpars = self.scale_pars(all_inpars)
                 q = 0
                 for a in self.analyses.values():
                     d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
                     for dist_name, dist in d.items():
+                        print("x[{0}]:".format(dist_name), x[dist_name])
                         q += -2*dist.log_prob(x[dist_name])
                 grads = tape.gradient(q, catted_pars)
                 #grads = tape.jacobian(q, catted_pars)
@@ -626,8 +644,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                 # print("all_inpars:", all_inpars)
                 # print("scaled_inpars:", scaled_inpars)
                 # print("catted_pars:", catted_pars)
-                # print("q:", q)
-                # print("grads:", grads)
+                print("q:", q)
+                print("grads:", grads)
             # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
             #hessians = tape.batch_jacobian(grads, catted_pars) 
             #...but we are only allowing one sample anyway, so can just do normal jacobian
@@ -777,8 +795,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                 print("signal...", signal[ka][kp])
                 parlist += [signal[ka][kp]]
         s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
-        s_0 = c.cat_pars(interest) # stacked interest parameter values at expansion point
-        theta_0 = c.cat_pars(nuisance) # stacked nuisance parameter values at expansion point
+        s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
+        theta_0 = c.cat_pars_2d(nuisance) # stacked nuisance parameter values at expansion point
         print("theta_0.shape:",theta_0.shape)
         print("A.shape:",A.shape)
         print("B.shape:",B.shape)
@@ -793,7 +811,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         print("theta_prof.shape:", theta_prof.shape)
         # de-stack theta_prof
-        theta_prof_dict = c.uncat_pars(theta_prof,pars_template=nuisance)
+        theta_prof_dict = c.uncat_pars_2d(theta_prof,pars_template=nuisance)
         print("theta_prof_dict:", theta_prof_dict)
         print("signal:", signal)
         # Compute -2*log_prop
