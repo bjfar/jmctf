@@ -288,6 +288,13 @@ def extract_ith(d,i):
         out = {}
         for k,v in d.items():
             out[k] = extract_ith(v,i)
+    elif d.shape==():
+        if i==0:
+            # We will allow extraction of a scalar using index 0
+            out = d
+        else:
+            msg = "Tried to extract from a scalar using index other than zero! Index was {0}, bottom-level item was {1}".format(i,d)
+            raise IndexError(msg)
     else:
         out = d[i]
     return out
@@ -333,6 +340,19 @@ def _squeeze_axis_0_inner(pars):
         out = tf.squeeze(pars,axis=0) # Should be pre-checked to be size 1
     return out
   
+def loose_squeeze(tensor,axis):
+    """Applies squeeze to bottom-level dict objects along axis, but isn't an error if the axis
+       is not size 1 (just does nothing in that case)"""
+    if isinstance(tensor, Mapping):
+        out = {}
+        for k,v in tensor.items():
+            out[k] = loose_squeeze(v,axis)
+    elif tensor.shape[axis]==1: 
+        out = tf.squeeze(tensor,axis=axis)
+    else:
+        out = tensor
+    return out
+
 def cat_pars_2d(pars,remove_axis0=False):
     """Stack separate tensorflow parameters from a dictionary into
        a single tensor, in order fixed by the dict default iteration order.

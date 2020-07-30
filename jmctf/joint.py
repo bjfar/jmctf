@@ -611,12 +611,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         hessian_list = []
         grad_list = []
         for x in c.iterate_samples(samples):
+            #x = c.loose_squeeze(xi,axis=0) # Remove leading singleton (hypothesis) dimension to improve Hessian shape
             with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
                 tape.watch(input_pars)
                 # Don't need to go via JointDistribution, can just
                 # get log_prob for all component dists "manually"
                 # Avoids confusion about parameters getting copied and
                 # breaking TF graph connections etc.
+                print("x:", x)
                 print("free_pars:", free_pars)
                 catted_pars = tf.expand_dims(input_pars,axis=0) # Put singleton hypothesis axis back in for de-catting later
                 print("input_pars:", input_pars)
@@ -636,7 +638,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                     for dist_name, dist in d.items():
                         print("x[{0}]:".format(dist_name), x[dist_name])
                         q += -2*dist.log_prob(x[dist_name])
-                grads = tape.gradient(q, catted_pars)
+                grads = tape.gradient(q, catted_pars)[0]
                 #grads = tape.jacobian(q, catted_pars)
                 #grads = tape.batch_jacobian(q, catted_pars)
                 #grads = tape.hessians(q, catted_pars)
@@ -807,6 +809,11 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("B:", B)
         #print("s:", s)
         print("s_0:", s_0)
+        theta_prof = theta_0 - tf.expand_dims(A,axis=1)
+        theta_prof = tf.expand_dims(s,axis=0)-s_0
+        print("tf.expand_dims(B,axis=1):", tf.expand_dims(B,axis=1))
+        print("tf.expand_dims(s,axis=0):", tf.expand_dims(s,axis=0))         
+        theta_prof = tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         print("theta_prof.shape:", theta_prof.shape)

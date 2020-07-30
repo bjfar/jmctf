@@ -6,19 +6,19 @@ import pytest
 
 from tensorflow_probability import distributions as tfd
 from jmctf import JointDistribution
-from jmctf_tests.analysis_class_register import get_id_list, get_all_obj, get_test_hypothesis, get_hypothesis_lists
+from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists
 
 # Fixture to create just analysis objects
 @pytest.fixture(scope="module", 
-                params=get_all_obj(),
+                params=get_obj().values(),
                 ids = get_id_list())
 def analysis(request):
     yield request.param
 
 # Fixture to create analysis objects and provide test parameters to use with them 
 @pytest.fixture(scope="module", 
-                params=list(zip(get_all_obj().values(),get_test_hypothesis().values()))
-                      +list(zip(get_all_obj().values(),get_hypothesis_lists().values())),
+                params=list(zip(get_obj().values(),get_test_hypothesis().values()))
+                      +list(zip(get_obj().values(),get_hypothesis_lists().values())),
                 ids = [name + " (single hypothesis)" for name in get_id_list()]
                      +[name + " (hypothesis list)" for name in get_id_list()])
 def analysis_and_parameters(request):
@@ -49,7 +49,7 @@ def test_tensorflow_models(model):
 def do_for_all_analyses(test_func):
     @pytest.mark.parametrize(
         "analysis,single_hypothesis,many_hypotheses",
-        zip(get_all_obj().values(),get_test_hypothesis().values(),get_hypothesis_lists().values()),
+        zip(get_obj().values(),get_test_hypothesis().values(),get_hypothesis_lists().values()),
         ids = get_id_list()
         )
     def wrapper(analysis,single_hypothesis,many_hypotheses):

@@ -25,21 +25,21 @@ def get_id_list():
 
 def get_obj(name=None):
     if name is None:
-        out = {name: a.get_obj() for name,a in analysis_tests}
+        out = {name: a.get_obj() for name,a in analysis_tests.items()}
     else:
         out = analysis_tests[name].get_obj()
     return out
 
 def get_test_hypothesis(name=None):
     if name is None:
-        out = {name: a.get_single_hypothesis() for name,a in analysis_tests}
+        out = {name: a.get_single_hypothesis() for name,a in analysis_tests.items()}
     else:
         out = analysis_tests[name].get_single_hypothesis()
     return out
 
 def get_hypothesis_lists(name=None):
     if name is None:
-        out = {name: a.get_three_hypotheses() for name,a in analysis_tests}
+        out = {name: a.get_three_hypotheses() for name,a in analysis_tests.items()}
     else:
         out = analysis_tests[name].get_three_hypotheses()
     return out
