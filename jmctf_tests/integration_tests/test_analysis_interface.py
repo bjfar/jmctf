@@ -13,7 +13,7 @@ from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_h
                 params=get_obj().values(),
                 ids = get_id_list())
 def analysis(request):
-    yield request.param
+    return request.param
 
 # Fixture to create analysis objects and provide test parameters to use with them 
 @pytest.fixture(scope="module", 
@@ -23,20 +23,20 @@ def analysis(request):
                      +[name + " (hypothesis list)" for name in get_id_list()])
 def analysis_and_parameters(request):
     analysis, parameters = request.param
-    yield (analysis, parameters)
+    return (analysis, parameters)
 
 # Fixture to create tensorflow_probability models from each Analysis/test parameter combination
 @pytest.fixture(scope="module")
 def model(analysis_and_parameters):
     analysis, pars = analysis_and_parameters
-    yield analysis.tensorflow_model(pars)
+    return analysis.tensorflow_model(pars)
 
 # Fixture to create JointDistribution objects from each Analysis/test parameter combination
 @pytest.fixture(scope="module")
 def joint(analysis_and_parameters):
     analysis, pars = analysis_and_parameters
     joint = JointDistribution([analysis],{analysis.name: pars})
-    yield joint
+    return joint
 
 def test_tensorflow_models(model):
     """tensorflow_model function should return dictionary of tensorflow_probability distribution objects"""
