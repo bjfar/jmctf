@@ -852,6 +852,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             samples = joint.sample(N)
             logw = tf.zeros((N,1),dtype=c.TFdtype)
 
+        print("in add_events: null_hyp:", self.null_hyp)
+        print("in add_events: samples:", samples)
+
         # Save events to database
         conn = self.connect_to_db()
         cur = conn.cursor()
@@ -1010,11 +1013,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             i = 0
             pars = {}
             for par,size in nuis_structure.items():
-                pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
+                #pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
+                pars[par] = alldata[:,i:i+size]
                 i+=size
             nuis_pars = {self.analysis.name: pars}
         else:
             nuis_pars = None
+
         return nuis_pars
 
     def fit_alternate_batch(self,events,alt_hyp,altIDs=None,record_all=True):
@@ -1030,10 +1035,34 @@ class LEECorrectorAnalysis(LEECorrectorBase):
     def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
            set of events, expanding around the supplied nuisance parameter point with
-           the null hypothesis"""
+           the null hypothesis
+           
+           TODO: Having some shape confusions here. I *think* we need a set of nuisance
+           parameters for each event, e.g. the best fit nuisance parameters for each
+           event under (say) the background-only hypothesis. So need to make sure pars
+           and events supplied have dimensions consistent with this.
+        """
+
+        par_size = c.get_size(pars,axis=0)
+
+        # Squeeze out the "hypothesis list" axis from events, to give output Hessians
+        # a better shape.
+        # TODO: Should only be events for one hypothesis given as input. Check shape
+        events_sq = c.deep_squeeze(events,axis=1)
+        e_size = c.get_size(events_sq,axis=0)
+
+        if par_size is None or e_size is None:
+            raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,events))
+
+        if par_size!=e_size:
+            msg = "Parameters and events did not have sizes consistent for compute_quad: axis 0 size must match!"
+            raise ValueError(msg)
+
+        print("pars:", pars)
+        print("events_sq:", events_sq)
+
         joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
-        print("self.null_hyp:",self.null_hyp)
-        quadf = joint_fitted_b.quad_loglike_f(events)
+        quadf = joint_fitted_b.quad_loglike_f(events_sq)
 
         return quadf 
 
@@ -1312,7 +1341,6 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                     for i in range(arr.shape[-1]):
                         cols += ["{0}_{1}".format(par,i)]
                     arrays += [fix_dims(arr)] # remove 'alternate hypothesis' dimension, if needed
-                print("arrays:", arrays)
                 allpars = tf.concat(arrays,axis=-1)               
                 data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
                 data.index.name = 'EventID' 

@@ -227,11 +227,11 @@ def flatten(container):
             else:
                 yield i
 
-def atleast_2d(pars,report=False):
+def atleast_2d(pars,report=False,new1Daxis=1):
     """Ensure parameters in nested dictionaries meet the shape conventions of JointDistribution, i.e.
        all pars must be 2D (as expanded by atleast_2d)
-       Doesn't work quite like the numpy version: new dimensions
-       for 1D input are added at axis 1 rather than 0.
+       Doesn't work quite like the numpy version by default: new dimensions
+       for 1D input are added at axis 1 rather than 0. But setting new1Daxis=0 gives numpy behaviour.
        If 'report' is True, also return a flag indicating whether any dimension expansion occured. 
     """
     did_expansion = False
@@ -245,7 +245,7 @@ def atleast_2d(pars,report=False):
         out = tf.expand_dims(tf.expand_dims(pars,axis=0),axis=0)
         did_expansion = True
     elif len(pars.shape)==1:
-        out = tf.expand_dims(pars,axis=1)
+        out = tf.expand_dims(pars,axis=new1Daxis)
         did_expansion = True               
     else:
         out = pars
@@ -306,7 +306,7 @@ def get_size(d,axis):
         size = -1
         for k,v in d.items():
             size_v = get_size(v,axis)
-            if size==-1: 
+            if size==-1 or size==1: # size 1 can be broadcast to larger sizes, so this is ok to be different 
                 size = size_v
             elif size!=size_v:
                 size = None
@@ -323,7 +323,7 @@ def squeeze_axis_0(pars):
     pars_2d = atleast_2d(pars)
     size_axis0 = get_size(pars,axis=0)
     if size_axis0==1:
-        out = _squeeze_axis_0_inner(pars)
+        out = deep_squeeze(pars,axis=0)
     elif size_axis0==None:
         msg = "Error while squeezing axis 0 for objects in nested dictionary! Objects did not have consistent size of axis 0"
         raise ValueError(msg) 
@@ -331,13 +331,14 @@ def squeeze_axis_0(pars):
         out = pars # Do nothing to parameters, not even the shape adjustment
     return out
 
-def _squeeze_axis_0_inner(pars):
+def deep_squeeze(pars,axis):
+    """Apply tf.squeeze to all bottom-level objects in nested dictionaries"""
     if isinstance(pars, Mapping):
         out = {}
         for k,v in pars.items():
-            out[k] = _squeeze_axis_0_inner(v)
+            out[k] = deep_squeeze(v,axis)
     else:
-        out = tf.squeeze(pars,axis=0) # Should be pre-checked to be size 1
+        out = tf.squeeze(pars,axis=axis) # Should be pre-checked to be size 1
     return out
   
 def loose_squeeze(tensor,axis):

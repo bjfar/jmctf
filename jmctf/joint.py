@@ -541,8 +541,16 @@ class JointDistribution(tfd.JointDistributionNamed):
         return q, joint_fitted, par_dict 
 
     def Hessian(self,pars,samples):
-        """Obtain Hessian matrix (and grad) at input parameter point
-           Make sure to use de-scaled parameters as input!"""
+        """Obtain Hessian matrix (and grad) at input parameter points
+           Make sure to use de-scaled parameters as input!
+
+           Shape requirements: pars must either be a *single* hypothesis,
+           or else a number of hypotheses equal to the number of samples
+           (e.g. for when we want one Hessian per sample, expanded around
+           some parameter point tailored to each sample).
+
+           NOTE: Actually for now we only allow the second option.
+        """
 
         # Check parameter shapes. We should only compute the Hessian for
         # one set of parameters at a time (but can have many samples)
@@ -552,12 +560,15 @@ class JointDistribution(tfd.JointDistributionNamed):
         #        msg = "Multiple samples detected in input to Hessian calculation! Please only compute Hessians for one sample at a time. (shape of input sample {0} was {1}; first dimension must be 1.".format(name,x.shape)
         #        raise ValueError(msg)
 
-        for a,p in pars.items():
-            for name,par in p.items():
-                if par.shape!=() and len(par.shape)>1:
-                    if par.shape[0]!=1:
-                        msg = "Multiple independent hypotheses detected in parameter input to Hessian calculation! Please only compute Hessians for one parameter point at a time. (shape of parameter {0} for analysis {1} was {2}; first dimension must be 1 when multiple dimensions exist".format(name,a,par.shape)
-                        raise ValueError(msg)
+        par_size = c.get_size(pars,axis=0)
+        e_size = c.get_size(samples,axis=0)
+
+        if par_size is None or e_size is None:
+            raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,samples))
+
+        if par_size!=e_size:
+            msg = "Parameters and events did not have sizes consistent for Hessian calculation: axis 0 size must match!"
+            raise ValueError(msg)
 
         # Need to adjust sample shapes to make Hessian output nicer
         # Squeeze out singleton dimensions.
@@ -582,9 +593,7 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
-        # "Hypothesis" axis squeezed to avoid extra singleton dimensions in final Hessian
-        # (we are only allowed one hypothesis at a time anyway)
-        input_pars = tf.Variable(c.cat_pars_2d(free_pars,remove_axis0=True)) # Our input variables to be traced. Singleton axis 0 removed for better Hessian shape.
+        all_input_pars = c.cat_pars_2d(free_pars) # Our input variables to be traced. 
 
         ## with tf.GradientTape(persistent=True) as tape:
         ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
@@ -610,7 +619,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         # pre-built graph
         hessian_list = []
         grad_list = []
-        for x in c.iterate_samples(samples):
+        for x,input_pars_slice in zip(c.iterate_samples(samples),all_input_pars):
+            input_pars = tf.Variable(input_pars_slice)
             #x = c.loose_squeeze(xi,axis=0) # Remove leading singleton (hypothesis) dimension to improve Hessian shape
             with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
                 tape.watch(input_pars)
@@ -642,8 +652,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                 #grads = tape.jacobian(q, catted_pars)
                 #grads = tape.batch_jacobian(q, catted_pars)
                 #grads = tape.hessians(q, catted_pars)
-                # print("samples:", samples)
-                # print("all_inpars:", all_inpars)
+                print("samples:", samples)
+                print("all_inpars:", all_inpars)
                 # print("scaled_inpars:", scaled_inpars)
                 # print("catted_pars:", catted_pars)
                 print("q:", q)

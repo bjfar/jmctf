@@ -79,12 +79,12 @@ class SigGen:
         self.j += size
         return chunk, list(range(j,j+size))
 
-nosignal = {a.name: {'s': tf.constant([[0. for sr in a.SR_names]],dtype=float)} for a in analyses_read}
+nosignal = {a.name: {'s': tf.constant([tuple(0. for sr in a.SR_names)],dtype=float)} for a in analyses_read}
 DOF = 3
 
 # Specific signal whose local distributions and p-values we would like to know
 # This case is 'cherry-picked' to match the "observed" counts in every signal region of every analysis
-signal_test = {a.name: {'s': tf.constant([[n for n in a.SR_n]], dtype=float)} for a in analyses_read}
+signal_test = {a.name: {'s': tf.constant([tuple(n for n in a.SR_n)], dtype=float)} for a in analyses_read}
 
 path = 'TEST'
 master_name = 'all'
