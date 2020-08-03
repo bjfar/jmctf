@@ -38,6 +38,25 @@ def to_numpy(d):
         else: out[k] = v.numpy()
         return out
 
+def deep(d_arg=0):
+    def deep_decorator(f):
+        """Decorator to make a function apply over the
+           bottom level of nested dictionaries.
+           d_arg specified which argument of the
+           function is to be treated as the dictionary"""
+        def deep_f(*args,**kwargs):
+            if isinstance(args[d_arg], Mapping):
+                out = {}
+                for k,v in args[d_arg].items():
+                    args_list = list(args)
+                    args_list[d_arg] = v
+                    out[k] = deep_f(*args_list,**kwargs)
+            else:
+                out = f(*args,**kwargs)
+            return out
+        return deep_f
+    return deep_decorator
+
 def adapt_array(arr):
     """
     http://stackoverflow.com/a/31312102/190597 (SoulNibbler)
@@ -282,12 +301,14 @@ def prepare_par_shapes(pars,squeeze=True):
         pars_out = pars_2d  
     return pars_out, did_expansion
 
-def extract_ith(d,i):
-    """Extract ith entry from bottom level of all nested dictionaries"""
+def extract_ith(d,i,keep_axis=False):
+    """Extract ith entry from bottom level of all nested dictionaries.
+       If keep_axis=True then the axis from which the entry is extracted
+       is kept as a singleton dimension."""
     if isinstance(d,Mapping):
         out = {}
         for k,v in d.items():
-            out[k] = extract_ith(v,i)
+            out[k] = extract_ith(v,i,keep_axis)
     elif d.shape==():
         if i==0:
             # We will allow extraction of a scalar using index 0
@@ -295,6 +316,8 @@ def extract_ith(d,i):
         else:
             msg = "Tried to extract from a scalar using index other than zero! Index was {0}, bottom-level item was {1}".format(i,d)
             raise IndexError(msg)
+    elif keep_axis:
+        out = d[i:i+1]
     else:
         out = d[i]
     return out
@@ -331,15 +354,15 @@ def squeeze_axis_0(pars):
         out = pars # Do nothing to parameters, not even the shape adjustment
     return out
 
+@deep(1)
+def deep_einsum(instructions,d):
+    """Perform a tf.einsum on the bottom level of nested dictionaries"""
+    return tf.einsum(instructions,d)
+
+@deep(0)
 def deep_squeeze(pars,axis):
     """Apply tf.squeeze to all bottom-level objects in nested dictionaries"""
-    if isinstance(pars, Mapping):
-        out = {}
-        for k,v in pars.items():
-            out[k] = deep_squeeze(v,axis)
-    else:
-        out = tf.squeeze(pars,axis=axis) # Should be pre-checked to be size 1
-    return out
+    return tf.squeeze(pars,axis=axis) # Should be pre-checked to be size 1
   
 def loose_squeeze(tensor,axis):
     """Applies squeeze to bottom-level dict objects along axis, but isn't an error if the axis
@@ -416,7 +439,7 @@ def uncat_pars_2d(catted_pars,pars_template,axis0_removed=False):
                 piN = tf.squeeze(catted_pars_2d[...,i:i+N],axis=[0,1])
             elif len(p.shape)==1:
                 N = 1 # Assume there is an implicit singleton inner dimension
-                piN = tf.squeeze(catted_pars_2d[...,i:i+N],axis=[0])        
+                piN = catted_pars_2d[...,i:i+N]        
             else:
                 # No change to shape required
                 N = p.shape[-1]

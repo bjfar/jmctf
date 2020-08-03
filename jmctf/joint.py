@@ -570,9 +570,12 @@ class JointDistribution(tfd.JointDistributionNamed):
             msg = "Parameters and events did not have sizes consistent for Hessian calculation: axis 0 size must match!"
             raise ValueError(msg)
 
-        # Need to adjust sample shapes to make Hessian output nicer
-        # Squeeze out singleton dimensions.
+        # Need to adjust sample shapes so that they are interpreted by tensorflow_probability
+        # as "batches", one for each entry of 'pars', rather than as a single batch of many 'events'.
+        # In this case it just means swapping the first two dimensions
         print("Hessian: samples:", samples)
+        batch_samples = c.deep_einsum("ij...->ji...",samples)
+        print("batch_samples:", batch_samples)
  
         # Separate "const" parameters, and also adjust shapes of parameters
         # to make life easier later
@@ -589,7 +592,7 @@ class JointDistribution(tfd.JointDistributionNamed):
                     free_pars[a][name] = v
 
         # Make sure shape of const parameters is correct
-        const_pars0 = c.extract_ith(c.atleast_2d(const_pars),0)
+        const_pars_2d = c.atleast_2d(const_pars)
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
@@ -619,60 +622,50 @@ class JointDistribution(tfd.JointDistributionNamed):
         # pre-built graph
         hessian_list = []
         grad_list = []
-        for x,input_pars_slice in zip(c.iterate_samples(samples),all_input_pars):
-            input_pars = tf.Variable(input_pars_slice)
-            #x = c.loose_squeeze(xi,axis=0) # Remove leading singleton (hypothesis) dimension to improve Hessian shape
-            with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
+        #for x,input_pars_slice in zip(c.iterate_samples(samples),all_input_pars):
+        input_pars = tf.Variable(all_input_pars)
+        #x = c.loose_squeeze(xi,axis=0) # Remove leading singleton (hypothesis) dimension to improve Hessian shape
+        with tf.GradientTape() as tape_outer:
+            with tf.GradientTape() as tape:
+            #with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
                 tape.watch(input_pars)
                 # Don't need to go via JointDistribution, can just
                 # get log_prob for all component dists "manually"
                 # Avoids confusion about parameters getting copied and
                 # breaking TF graph connections etc.
-                print("x:", x)
+                print("samples:", samples)
                 print("free_pars:", free_pars)
-                catted_pars = tf.expand_dims(input_pars,axis=0) # Put singleton hypothesis axis back in for de-catting later
                 print("input_pars:", input_pars)
-                print("catted_pars:", catted_pars)
-                inpars = c.uncat_pars_2d(catted_pars,free_pars) # need to unstack for use in each analysis
-                # Extract 0th hypothesis from unstacked pars
-                # Basically removes 0th dimension again to improve generated samples shape and thus Hessian shape.
-                inpars0 = c.extract_ith(inpars,0) 
-             
+                #print("catted_pars:", catted_pars)
+                inpars = c.uncat_pars_2d(input_pars,free_pars) # need to unstack for use in each analysis
+         
                 # print("inpars:", inpars)
                 # merge with const parameters
-                all_inpars = c.deep_merge(inpars0,const_pars0)
+                all_inpars = c.deep_merge(inpars,const_pars_2d)
                 scaled_inpars = self.scale_pars(all_inpars)
                 q = 0
                 for a in self.analyses.values():
                     d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
                     for dist_name, dist in d.items():
-                        print("x[{0}]:".format(dist_name), x[dist_name])
-                        q += -2*dist.log_prob(x[dist_name])
-                grads = tape.gradient(q, catted_pars)[0]
-                #grads = tape.jacobian(q, catted_pars)
-                #grads = tape.batch_jacobian(q, catted_pars)
-                #grads = tape.hessians(q, catted_pars)
-                print("samples:", samples)
-                print("all_inpars:", all_inpars)
-                # print("scaled_inpars:", scaled_inpars)
-                # print("catted_pars:", catted_pars)
+                        print("x[{0}]:".format(dist_name), batch_samples[dist_name])
+                        q += -2*dist.log_prob(batch_samples[dist_name])
                 print("q:", q)
-                print("grads:", grads)
-            # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
-            #hessians = tape.batch_jacobian(grads, catted_pars) 
-            #...but we are only allowing one sample anyway, so can just do normal jacobian
-            hessian = tape.jacobian(grads, input_pars)
-            #print("H:",hessians)
-            grad_list += [grads]
-            hessian_list += [hessian]
-        print("hessian_list:", hessian_list)
-        grads = tf.stack(grad_list,axis=0)
-        hessians = tf.stack(hessian_list,axis=0)
-      
-        # Remove the singleton dimensions. We should not be computing Hessians for batches of signal hypotheses.
-        #grads_out = tf.squeeze(grads,axis=[-2])
-        #hessians_out = tf.squeeze(hessians,axis=[-2,-4])
-        # ... not very robust. Need to instead fix up shapes of input parameters I think.
+            grads = tape.gradient(q, input_pars) #[0]
+            #grads = tape.jacobian(q, catted_pars)
+            #grads = tape.batch_jacobian(q, catted_pars)
+            #grads = tape.hessians(q, catted_pars)
+            print("batch_samples:", batch_samples)
+            print("all_inpars:", all_inpars)
+            # print("scaled_inpars:", scaled_inpars)
+            # print("catted_pars:", catted_pars)
+            print("q:", q)
+            print("grads:", grads)
+        # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
+        hessians = tape_outer.batch_jacobian(grads, input_pars) 
+        #...but we are only allowing one sample anyway, so can just do normal jacobian
+        #hessian = tape_outer.jacobian(grads, input_pars)
+        print("H:",hessians)
+     
         grads_out = grads
         hessians_out = hessians
 
