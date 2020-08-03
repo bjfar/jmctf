@@ -10,7 +10,7 @@ import numpy as np
 import scipy.stats as sps
 import scipy.interpolate as spi
 
-N = int(1e4)
+N = int(1e2)
 do_mu_tests=True
 do_gof_tests=True
 
@@ -108,6 +108,7 @@ lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=1
 #lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 
 bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100)
+#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1e5,batch_size=100)
 #bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='hdf5')
 #bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='sqlite')
 bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL

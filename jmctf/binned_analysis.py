@@ -109,7 +109,7 @@ class BinnedAnalysis(BaseAnalysis):
             bsys_tmp = self.SR_b_sys[:]
 
         # Prepare input parameters
-        print("input pars:",pars)
+        #print("input pars:",pars)
         b = tf.expand_dims(tf.constant(self.SR_b,dtype=c.TFdtype),0) # Expand to match shape of signal list
         bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=c.TFdtype),0)
         s = pars['s'] * self.s_scaling # We "scan" normalised versions of s, to help optimizer

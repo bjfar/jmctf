@@ -361,6 +361,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             all_pars_1[a.name] = p
 
         # Next, apply shape changes if needed
+        print("all_pars_1:", all_pars_1)
         all_pars_2, squeezed = c.prepare_par_shapes(all_pars_1)
 
         # Next, add the nuisance parameters in if needed, and check their shapes too
@@ -540,7 +541,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_dict["fixed"]  = self.descale_pars(const_pars)
         return q, joint_fitted, par_dict 
 
-    def Hessian(self,pars,samples):
+    def Hessian(self,samples):
         """Obtain Hessian matrix (and grad) at input parameter points
            Make sure to use de-scaled parameters as input!
 
@@ -550,7 +551,12 @@ class JointDistribution(tfd.JointDistributionNamed):
            some parameter point tailored to each sample).
 
            NOTE: Actually for now we only allow the second option.
+
+           Parameters should be those already known internally to this
+           JointDistribution.
         """
+
+        pars = self.descale_pars(self.pars) # Make sure to use non-scaled parameters to get correct gradients etc.
 
         # Check parameter shapes. We should only compute the Hessian for
         # one set of parameters at a time (but can have many samples)
@@ -567,7 +573,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,samples))
 
         if par_size!=e_size:
-            msg = "Parameters and events did not have sizes consistent for Hessian calculation: axis 0 size must match!"
+            msg = "Parameters and events did not have sizes consistent for Hessian calculation: axis 0 size must match! par_size was {0}, e_size was {1}".format(par_size,e_size)
             raise ValueError(msg)
 
         # Need to adjust sample shapes so that they are interpreted by tensorflow_probability
@@ -631,9 +637,9 @@ class JointDistribution(tfd.JointDistributionNamed):
                 # get log_prob for all component dists "manually"
                 # Avoids confusion about parameters getting copied and
                 # breaking TF graph connections etc.
-                print("samples:", samples)
-                print("free_pars:", free_pars)
-                print("input_pars:", input_pars)
+                #print("samples:", samples)
+                #print("free_pars:", free_pars)
+                #print("input_pars:", input_pars)
                 #print("catted_pars:", catted_pars)
                 inpars = c.uncat_pars_2d(input_pars,free_pars) # need to unstack for use in each analysis
          
@@ -645,31 +651,31 @@ class JointDistribution(tfd.JointDistributionNamed):
                 for a in self.analyses.values():
                     d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
                     for dist_name, dist in d.items():
-                        print("x[{0}]:".format(dist_name), samples[dist_name])
-                        print("dist {0} description: {1}".format(dist_name,dist))
+                        #print("x[{0}]:".format(dist_name), samples[dist_name])
+                        #print("dist {0} description: {1}".format(dist_name,dist))
                         q += -2*dist.log_prob(samples[dist_name])
-                print("q:", q)
+                #print("q:", q)
             grads = tape.gradient(q, input_pars) #[0]
             #grads = tape.jacobian(q, catted_pars)
             #grads = tape.batch_jacobian(q, catted_pars)
             #grads = tape.hessians(q, catted_pars)
-            print("samples:", samples)
-            print("all_inpars:", all_inpars)
+            #print("samples:", samples)
+            #print("all_inpars:", all_inpars)
             # print("scaled_inpars:", scaled_inpars)
             # print("catted_pars:", catted_pars)
-            print("q:", q)
-            print("grads:", grads)
+            #print("q:", q)
+            #print("grads:", grads)
         # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
         hessians = tape_outer.batch_jacobian(grads, input_pars) 
         #...but we are only allowing one sample anyway, so can just do normal jacobian
         #hessian = tape_outer.jacobian(grads, input_pars)
-        print("H:",hessians)
+        #print("H:",hessians)
      
         grads_out = grads
         hessians_out = hessians
 
-        print("g_out:",grads_out)
-        print("H_out:",hessians_out)
+        #print("g_out:",grads_out)
+        #print("H_out:",hessians_out)
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):
@@ -749,11 +755,11 @@ class JointDistribution(tfd.JointDistributionNamed):
            around input parameter point(s), and compute quantities needed
            for analytic determination of profile likelihood for fixed signal
            parameters, under this approximation."""
-        pars = self.descale_pars(self.pars) # Make sure to use non-scaled parameters to get correct gradients etc.
         #print("Computing Hessian and various matrix operations for all samples...")
-        H, g = self.Hessian(pars,samples)
+        H, g = self.Hessian(samples)
         print("H:", H)
         print("g:", g) # Should be close to zero if fits worked correctly
+        pars = self.descale_pars(self.pars) # This is what Hessian uses internally
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
         print("descaled_pars:", pars)
@@ -796,7 +802,7 @@ class JointDistribution(tfd.JointDistributionNamed):
             for kp in a.keys():
                 if kp not in signal[ka].keys():
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
-                print("signal...", signal[ka][kp])
+                #print("signal...", signal[ka][kp])
                 parlist += [signal[ka][kp]]
         s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
         s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
@@ -811,24 +817,24 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("B:", B)
         #print("s:", s)
         #print("s_0:", s_0)
-        theta_prof = theta_0 - tf.expand_dims(A,axis=1)
-        theta_prof = tf.expand_dims(s,axis=0)-s_0
+        #theta_prof = theta_0 - tf.expand_dims(A,axis=1)
+        #theta_prof = tf.expand_dims(s,axis=0)-s_0
         print("tf.expand_dims(B,axis=1).shape:", tf.expand_dims(B,axis=1).shape)
         print("tf.expand_dims(s,axis=0).shape:", tf.expand_dims(s,axis=0).shape)         
-        theta_prof = tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
+        #theta_prof = tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
         #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         print("theta_prof.shape:", theta_prof.shape)
         # de-stack theta_prof
         theta_prof_dict = c.uncat_pars_2d(theta_prof,pars_template=nuisance)
-        print("theta_prof_dict:", theta_prof_dict)
-        print("signal:", signal)
+        #print("theta_prof_dict:", theta_prof_dict)
+        #print("signal:", signal)
         # Compute -2*log_prop
         joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
         # Need to broadcast samples over the 'hypothesis' dimension
-        print("samples:", samples)
-        print("c.deep_expand_dims(samples,axis=1):", c.deep_expand_dims(samples,axis=1))
+        #print("samples:", samples)
+        #print("c.deep_expand_dims(samples,axis=1):", c.deep_expand_dims(samples,axis=1))
         q = -2*joint.log_prob(c.deep_expand_dims(samples,axis=1))
         print("q.shape:", q.shape)
         #quit()

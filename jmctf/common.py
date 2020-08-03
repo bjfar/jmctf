@@ -322,7 +322,7 @@ def extract_ith(d,i,keep_axis=False):
         out = d[i]
     return out
 
-def get_size(d,axis):
+def get_size(d,axis=0):
     """Measure the size along an axis of all bottom level objects in nested dictionaries.
        If size is consistent, return it, if dict(s) is empty returns -1, otherwise returns None"""
     if isinstance(d, Mapping):
@@ -331,6 +331,8 @@ def get_size(d,axis):
             size_v = get_size(v,axis)
             if size==-1 or size==1: # size 1 can be broadcast to larger sizes, so this is ok to be different 
                 size = size_v
+            elif size_v==1: # Again, can be broadcast to whatever 'size' is.
+                pass
             elif size!=size_v:
                 size = None
     else:
@@ -344,7 +346,10 @@ def squeeze_axis_0(pars):
        Also ensures that dim 0 is consistent size for all bottom-level objects"""
     # Ensure that 2d form is initially used
     pars_2d = atleast_2d(pars)
+    print("pars:", pars)
+    print("pars_2d:",pars_2d)
     size_axis0 = get_size(pars,axis=0)
+    print("size_axis0:", size_axis0)
     if size_axis0==1:
         out = deep_squeeze(pars,axis=0)
     elif size_axis0==None:
