@@ -579,6 +579,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # Need to adjust sample shapes so that they are interpreted by tensorflow_probability
         # as "batches", one for each entry of 'pars', rather than as a single batch of many 'events'.
         # In this case it just means swapping the first two dimensions
+        print("Hessian: pars:", pars)
         print("Hessian: samples:", samples)
  
         # Separate "const" parameters, and also adjust shapes of parameters
@@ -670,9 +671,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         #...but we are only allowing one sample anyway, so can just do normal jacobian
         #hessian = tape_outer.jacobian(grads, input_pars)
         #print("H:",hessians)
-     
-        grads_out = grads
+
         hessians_out = hessians
+        grads_out = grads
 
         #print("g_out:",grads_out)
         #print("H_out:",hessians_out)
