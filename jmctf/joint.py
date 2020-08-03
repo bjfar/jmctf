@@ -574,8 +574,6 @@ class JointDistribution(tfd.JointDistributionNamed):
         # as "batches", one for each entry of 'pars', rather than as a single batch of many 'events'.
         # In this case it just means swapping the first two dimensions
         print("Hessian: samples:", samples)
-        batch_samples = c.deep_einsum("ij...->ji...",samples)
-        print("batch_samples:", batch_samples)
  
         # Separate "const" parameters, and also adjust shapes of parameters
         # to make life easier later
@@ -647,14 +645,15 @@ class JointDistribution(tfd.JointDistributionNamed):
                 for a in self.analyses.values():
                     d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
                     for dist_name, dist in d.items():
-                        print("x[{0}]:".format(dist_name), batch_samples[dist_name])
-                        q += -2*dist.log_prob(batch_samples[dist_name])
+                        print("x[{0}]:".format(dist_name), samples[dist_name])
+                        print("dist {0} description: {1}".format(dist_name,dist))
+                        q += -2*dist.log_prob(samples[dist_name])
                 print("q:", q)
             grads = tape.gradient(q, input_pars) #[0]
             #grads = tape.jacobian(q, catted_pars)
             #grads = tape.batch_jacobian(q, catted_pars)
             #grads = tape.hessians(q, catted_pars)
-            print("batch_samples:", batch_samples)
+            print("samples:", samples)
             print("all_inpars:", all_inpars)
             # print("scaled_inpars:", scaled_inpars)
             # print("catted_pars:", catted_pars)
@@ -811,13 +810,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("A:", A)
         #print("B:", B)
         #print("s:", s)
-        print("s_0:", s_0)
+        #print("s_0:", s_0)
         theta_prof = theta_0 - tf.expand_dims(A,axis=1)
         theta_prof = tf.expand_dims(s,axis=0)-s_0
-        print("tf.expand_dims(B,axis=1):", tf.expand_dims(B,axis=1))
-        print("tf.expand_dims(s,axis=0):", tf.expand_dims(s,axis=0))         
+        print("tf.expand_dims(B,axis=1).shape:", tf.expand_dims(B,axis=1).shape)
+        print("tf.expand_dims(s,axis=0).shape:", tf.expand_dims(s,axis=0).shape)         
         theta_prof = tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
-        theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
+        theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
+        #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
         #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
         print("theta_prof.shape:", theta_prof.shape)
         # de-stack theta_prof
@@ -826,9 +826,11 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("signal:", signal)
         # Compute -2*log_prop
         joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
-        q = -2*joint.log_prob(samples)
-        print("q.shape:", q.shape)
+        # Need to broadcast samples over the 'hypothesis' dimension
         print("samples:", samples)
+        print("c.deep_expand_dims(samples,axis=1):", c.deep_expand_dims(samples,axis=1))
+        q = -2*joint.log_prob(c.deep_expand_dims(samples,axis=1))
+        print("q.shape:", q.shape)
         #quit()
         return q
 

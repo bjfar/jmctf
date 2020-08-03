@@ -363,7 +363,12 @@ def deep_einsum(instructions,d):
 def deep_squeeze(pars,axis):
     """Apply tf.squeeze to all bottom-level objects in nested dictionaries"""
     return tf.squeeze(pars,axis=axis) # Should be pre-checked to be size 1
-  
+
+@deep(0)
+def deep_expand_dims(d,axis):
+    """Apply tf.expand_dims to all bottom-level objects in nested dictionaries"""
+    return tf.expand_dims(d,axis=axis)
+
 def loose_squeeze(tensor,axis):
     """Applies squeeze to bottom-level dict objects along axis, but isn't an error if the axis
        is not size 1 (just does nothing in that case)"""
