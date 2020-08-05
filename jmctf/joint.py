@@ -747,10 +747,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("Hii:", Hii)
         print("Hnn:", Hnn)
         print("Hin:", Hin)
-        Hnn_inv = tf.linalg.inv(Hnn)
-        gn = self.sub_grad(g,nuisance_i)
-        A = tf.linalg.matvec(Hnn_inv,gn)
-        B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
+        if Hnn is None: # Could be None if there aren't any nuisance parameters!
+            A = None
+            B = None
+        else:
+            Hnn_inv = tf.linalg.inv(Hnn)
+            gn = self.sub_grad(g,nuisance_i)
+            A = tf.linalg.matvec(Hnn_inv,gn)
+            B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         #print("...done!")
         print("A:", A)
         print("B:", B)
@@ -781,38 +785,28 @@ class JointDistribution(tfd.JointDistributionNamed):
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
                 #print("signal...", signal[ka][kp])
                 parlist += [signal[ka][kp]]
-        s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
-        s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
-        theta_0 = c.cat_pars_2d(nuisance) # stacked nuisance parameter values at expansion point
 
-        # Squeeze theta_0 to 2D if it is too big (due to input parameter batch shape)
-        theta_0 = c.squeeze_to(theta_0,d=2) 
-    
-        print("theta_0.shape:",theta_0.shape)
-        print("A.shape:",A.shape)
-        print("B.shape:",B.shape)
-        print("s.shape:",s.shape)
-        print("s_0.shape:",s_0.shape)
-        #print("theta_0:", theta_0)
-        #print("A:", A)
-        #print("B:", B)
-        #print("s:", s)
-        #print("s_0:", s_0)
-        #theta_prof = theta_0 - tf.expand_dims(A,axis=1)
-        #theta_prof = tf.expand_dims(s,axis=0)-s_0
-        print("tf.expand_dims(B,axis=1).shape:", tf.expand_dims(B,axis=1).shape)
-        print("tf.expand_dims(s,axis=0).shape:", tf.expand_dims(s,axis=0).shape)         
-        #theta_prof = tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
-        theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
-        #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
-        #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
-        print("theta_prof.shape:", theta_prof.shape)
-        # de-stack theta_prof
-        theta_prof_dict = c.uncat_pars_2d(theta_prof,pars_template=nuisance)
-        #print("theta_prof_dict:", theta_prof_dict)
-        #print("signal:", signal)
-        # Compute -2*log_prop
-        joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
+        if A is None or B is None:
+            # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
+            # Compute -2*log_prob
+            joint = JointDistribution(self.analyses.values(),signal)
+        else:
+            s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
+            s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
+            theta_0 = c.cat_pars_2d(nuisance) # stacked nuisance parameter values at expansion point
+
+            # Squeeze theta_0 to 2D if it is too big (due to input parameter batch shape)
+            theta_0 = c.squeeze_to(theta_0,d=2) 
+   
+            # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
+            theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
+            #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
+            #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
+
+            # de-stack analytically profiled nuisance parameters
+            theta_prof_dict = c.uncat_pars_2d(theta_prof,pars_template=nuisance)
+            # Compute -2*log_prob
+            joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
         # This is a little confusing, but basically need to make the batch_shape+sample_shape for the sample
