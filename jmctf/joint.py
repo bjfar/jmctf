@@ -62,8 +62,8 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     else:
         all_pars = c.deep_merge(const_pars,pars_t)
 
-    tf.print("pars:", pars)
-    tf.print("all_pars:", all_pars)
+    #tf.print("pars:", pars)
+    #tf.print("all_pars:", all_pars)
 
     # Sanity check: make sure parameters haven't become nan somehow
     # Doesn't seem to work with @tf.function decorator or inside tfp optimizer
@@ -361,7 +361,6 @@ class JointDistribution(tfd.JointDistributionNamed):
             all_pars_1[a.name] = p
 
         # Next, apply shape changes if needed
-        print("all_pars_1:", all_pars_1)
         all_pars_2, squeezed = c.prepare_par_shapes(all_pars_1)
 
         # Next, add the nuisance parameters in if needed, and check their shapes too
@@ -556,34 +555,30 @@ class JointDistribution(tfd.JointDistributionNamed):
            JointDistribution.
         """
 
-        pars = self.descale_pars(self.pars) # Make sure to use non-scaled parameters to get correct gradients etc.
+        # Check batch shapes associated with internal probability models
+        # This will affect the output Hessian shape, and we need to correct for it.
+        # Returns a dict of batch shapes.
+        batch_shapes = self.batch_shape_tensor()
+ 
+        # The batch shapes should all be consistent!
+        consistent, batch_shape = c.deep_equals(batch_shapes)
+ 
+        print("Hessian: batch_shapes:", batch_shapes)
+        print("Hessian: batch_shape:", batch_shape)
 
-        # Check parameter shapes. We should only compute the Hessian for
-        # one set of parameters at a time (but can have many samples)
-        #print("samples:", samples)
-        #for name,x in samples.items():
-        #    if x.shape[0]!=1:
-        #        msg = "Multiple samples detected in input to Hessian calculation! Please only compute Hessians for one sample at a time. (shape of input sample {0} was {1}; first dimension must be 1.".format(name,x.shape)
-        #        raise ValueError(msg)
+        # Throw error if batch shape cannot be compressed to 1D
+        dims_to_squeeze = tf.where(tf.equal(batch_shape,1))[:,0]
+        print("dims_to_squeeze:", dims_to_squeeze) 
 
-        par_size = c.get_size(pars,axis=0)
-        e_size = c.get_size(samples,axis=0)
-
-        if par_size is None or e_size is None:
-            raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,samples))
-
-        if par_size!=e_size:
-            msg = "Parameters and events did not have sizes consistent for Hessian calculation: axis 0 size must match! par_size was {0}, e_size was {1}".format(par_size,e_size)
+        print(dims_to_squeeze.shape[0] - batch_shape.shape[0])
+        if batch_shape.shape[0]!=1 and (batch_shape.shape[0] - dims_to_squeeze.shape[0]) != 1:
+            msg = "Disallowed batch shape observed! For Hessian calculation we ultimated require 1D batches of hypotheses and samples to be matched, so any batch shape that cannot be 'squeezed' to 1D is not permitted. Please check the shapes of the supplied parameters."
             raise ValueError(msg)
 
-        # Need to adjust sample shapes so that they are interpreted by tensorflow_probability
-        # as "batches", one for each entry of 'pars', rather than as a single batch of many 'events'.
-        # In this case it just means swapping the first two dimensions
-        print("Hessian: pars:", pars)
-        print("Hessian: samples:", samples)
- 
-        # Separate "const" parameters, and also adjust shapes of parameters
-        # to make life easier later
+        # Make sure to use non-scaled parameters to get correct gradients etc.
+        pars = self.descale_pars(self.pars)
+
+        # Separate "const" parameters
         free_pars = {}
         const_pars = {}
         const_par_names = self.identify_const_parameters()
@@ -597,39 +592,13 @@ class JointDistribution(tfd.JointDistributionNamed):
                     free_pars[a][name] = v
 
         # Make sure shape of const parameters is correct
-        const_pars_2d = c.atleast_2d(const_pars)
+        const_pars_2d = c.atleast_2d(const_pars) # Do we really need this?
 
         # Stack current parameter values to single tensorflow variable for
         # easier matrix manipulation
         all_input_pars = c.cat_pars_2d(free_pars) # Our input variables to be traced. 
 
-        ## with tf.GradientTape(persistent=True) as tape:
-        ##     inpars = self.uncat_pars(catted_pars) # need to unstack for use in each analysis
-        ##     print("inpars:", inpars)
-        ##     # Due to a quirk of the JointDistribution constructor, 
-        ##     # we need to scale the parameters first. This is so we
-        ##     # can set "pre_scaled_pars=True", which will ensure that
-        ##     # parameters don't get copied to new objects, which would
-        ##     # break the TF graph connections.
-        ##     scaled_inpars = self.scale_pars(inpars)
-        ##     print("scaled_inpars:", scaled_inpars)
-        ##     print("self.analyses.values():", self.analyses.values())
-        ##     joint = JointDistribution(self.analyses.values(),scaled_inpars,pre_scaled_pars=True)
-        ##     q = -2*joint.log_prob(samples)
-        ##     print("q:", q)
-        ##     grads = tape.gradient(q, catted_pars)
-
-        # TODO:
-        # Unfortunately it seems like there isn't currently a way to compute
-        # gradients/hessians independently for lots of samples at once. So
-        # will need to loop over the samples. Hopefully it isn't absurdly slow.
-        # Could try to speed it up by putting inside a tf.function and using a
-        # pre-built graph
-        hessian_list = []
-        grad_list = []
-        #for x,input_pars_slice in zip(c.iterate_samples(samples),all_input_pars):
         input_pars = tf.Variable(all_input_pars)
-        #x = c.loose_squeeze(xi,axis=0) # Remove leading singleton (hypothesis) dimension to improve Hessian shape
         with tf.GradientTape() as tape_outer:
             with tf.GradientTape() as tape:
             #with tf.GradientTape(persistent=True,watch_accessed_variables=False) as tape:
@@ -670,13 +639,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         hessians = tape_outer.batch_jacobian(grads, input_pars) 
         #...but we are only allowing one sample anyway, so can just do normal jacobian
         #hessian = tape_outer.jacobian(grads, input_pars)
-        #print("H:",hessians)
+        print("H:",hessians)
 
-        hessians_out = hessians
-        grads_out = grads
-
-        #print("g_out:",grads_out)
-        #print("H_out:",hessians_out)
+        # If Hessian (or grad) dimension is too large (due to extra singleton dimensions in either the samples or the
+        # input parameters) then squeeze them out until we get to the right shape.
+        hessians_out = c.squeeze_to(hessians,d=3,dont_squeeze=[0])
+        grads_out = c.squeeze_to(grads,d=2,dont_squeeze=[0])
+        print("g_out:",grads_out)
+        print("H_out:",hessians_out)
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):
@@ -808,6 +778,10 @@ class JointDistribution(tfd.JointDistributionNamed):
         s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
         s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
         theta_0 = c.cat_pars_2d(nuisance) # stacked nuisance parameter values at expansion point
+
+        # Squeeze theta_0 to 2D if it is too big (due to input parameter batch shape)
+        theta_0 = c.squeeze_to(theta_0,d=2) 
+    
         print("theta_0.shape:",theta_0.shape)
         print("A.shape:",A.shape)
         print("B.shape:",B.shape)
@@ -833,11 +807,21 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("signal:", signal)
         # Compute -2*log_prop
         joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
-        # Need to broadcast samples over the 'hypothesis' dimension
-        #print("samples:", samples)
-        #print("c.deep_expand_dims(samples,axis=1):", c.deep_expand_dims(samples,axis=1))
-        q = -2*joint.log_prob(c.deep_expand_dims(samples,axis=1))
-        print("q.shape:", q.shape)
-        #quit()
+
+        # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
+        # This is a little confusing, but basically need to make the batch_shape+sample_shape for the sample
+        # match the JointDistribution. Will assume axis 0 is always the "number of samples", so extra dims
+        # are to be inserted into the batch dims of the sample at axis 1.
+        consistent, batch_shape = c.deep_equals(joint.batch_shape_tensor())
+        if not consistent:
+            msg = "Inconsistent batch dimensions found! Batch shape dictionary was: {0}".format(joint.batch_shape_tensor())
+            raise ValueError(msg)
+        event_shape = joint.event_shape_tensor()
+        s_batch_shape = c.sample_batch_shape(samples,event_shape)
+        n_new_dims = len(batch_shape) - len(s_batch_shape)
+        matched_samples = samples
+        for i in range(n_new_dims):
+            matched_samples = c.deep_expand_dims(matched_samples,axis=1)
+        q = -2*joint.log_prob(matched_samples)
         return q
 

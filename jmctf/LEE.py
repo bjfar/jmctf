@@ -1043,13 +1043,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            and events supplied have dimensions consistent with this.
         """
 
-        par_size = c.get_size(pars,axis=0)
+        par_size = c.deep_size(pars,axis=0)
 
         # Squeeze out the "hypothesis list" axis from events, to give output Hessians
         # a better shape.
         # TODO: Should only be events for one hypothesis given as input. Check shape
         events_sq = c.deep_squeeze(events,axis=1)
-        e_size = c.get_size(events_sq,axis=0)
+        e_size = c.deep_size(events_sq,axis=0)
 
         if par_size is None or e_size is None:
             raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,events))

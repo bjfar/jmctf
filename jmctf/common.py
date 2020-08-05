@@ -322,13 +322,13 @@ def extract_ith(d,i,keep_axis=False):
         out = d[i]
     return out
 
-def get_size(d,axis=0):
+def deep_size(d,axis=0):
     """Measure the size along an axis of all bottom level objects in nested dictionaries.
        If size is consistent, return it, if dict(s) is empty returns -1, otherwise returns None"""
     if isinstance(d, Mapping):
         size = -1
         for k,v in d.items():
-            size_v = get_size(v,axis)
+            size_v = deep_size(v,axis)
             if size==-1 or size==1: # size 1 can be broadcast to larger sizes, so this is ok to be different 
                 size = size_v
             elif size_v==1: # Again, can be broadcast to whatever 'size' is.
@@ -339,6 +339,54 @@ def get_size(d,axis=0):
         size = d.shape[axis]
     return size
 
+def deep_shape(d,axis=0,numpy_bcast=True):
+    """Measure the size along an axis of all bottom level objects in nested dictionaries.
+       If consistent (in broadcast terms) shape can be found, return it, otherwise an error is thrown."""
+    if isinstance(d, Mapping):
+        shape = None
+        for k,v in d.items():
+            shape_v = deep_shape(v,axis)
+            if shape == None:
+                shape = shape_v
+            shape = get_bcast_shape(shape,shape_v,numpy_bcast)
+    else:
+        shape = d.shape
+    return shape
+
+def get_bcast_shape(shape1,shape2,numpy_bcast=True):
+    """Of two tensor/array shapes, return the shape to which they can be broadcast under numpy rules
+       (or throw an error if bcast is not possible"""
+    if len(shape1)!=len(shape2):
+        if numpy_bcast:
+            # Apply numpy broadcasting rules to match dimensions and add "implicit" dimensions
+            if len(shape1)<len(shape2):
+                # Expand shape with ones on the left
+                newshape1 = [1 for s in shape2]
+                newshape1[-len(shape1)::] = shape1
+                shape1 = tuple(newshape1)
+            else:
+                # Expand shape_v with ones on the left
+                newshape2 = [1 for s in shape1]
+                newshape2[-len(shape2)::] = shape2
+                shape2 = tuple(newshape2) 
+        else:
+            # Without full numpy broadcasting, shape is indeterminate 
+            msg = "Shapes are not compatible! They have different numbers of dimensions (found {0} vs {1})".format(shape1,shape2)
+            raise ValueError(msg)
+    # Number of dimensions should now match. Now compare their sizes.
+    newshape = [-1 for s in shape1]
+    for i,(si,sv) in enumerate(zip(shape1,shape2)):
+        if si==sv:
+            newshape[i] = si
+        elif si==1:
+            newshape[i] = sv
+        elif sv==1:
+            newshape[i] = si
+        else:
+            msg = "Shapes are not compatible! Different sized dimensions (other than size 1) were found! (found {0} vs {1}, where (at least) dim {3} are not compatible".format(shape1,shape2,i)
+            raise ValueError(msg)
+    return tuple(newshape)
+
 def squeeze_axis_0(pars):
     """Examines parameter (i.e. nested) dictionary and, if it can be interpreted
        as describing just a single hypothesis, squeeze out the
@@ -348,7 +396,7 @@ def squeeze_axis_0(pars):
     pars_2d = atleast_2d(pars)
     print("pars:", pars)
     print("pars_2d:",pars_2d)
-    size_axis0 = get_size(pars,axis=0)
+    size_axis0 = deep_size(pars,axis=0)
     print("size_axis0:", size_axis0)
     if size_axis0==1:
         out = deep_squeeze(pars,axis=0)
@@ -357,6 +405,25 @@ def squeeze_axis_0(pars):
         raise ValueError(msg) 
     else:
         out = pars # Do nothing to parameters, not even the shape adjustment
+    return out
+
+def squeeze_to(tensor,d,dont_squeeze=[]):
+    """Squeeze a tensor down to d dimensions.
+       Throws error if this is not possible.
+       Just squeezes singleton dimensions starting
+       from the left until dimensions matches d.
+       Dimensions in dont_squeeze list will not
+       be squeezed.
+    """
+    squeezeable_dims = [d for d in tf.where(tf.equal(tensor.shape,1))[:,0].numpy() if d not in dont_squeeze]
+    nextra = len(tensor.shape) - d
+    if nextra<0:
+        msg = "Could not squeeze tensor to {0} dimensions! Starting dimension ({1}) is larger than target dimension!".format(d,len(tensor.shape))
+        raise ValueError(msg)
+    if nextra==0:
+        out = tensor # Already correct dimension
+    else:
+        out = tf.squeeze(tensor,axis=squeezeable_dims[:nextra])
     return out
 
 @deep(1)
@@ -373,6 +440,54 @@ def deep_squeeze(pars,axis):
 def deep_expand_dims(d,axis):
     """Apply tf.expand_dims to all bottom-level objects in nested dictionaries"""
     return tf.expand_dims(d,axis=axis)
+
+@deep(0)
+def deep_broadcast(d,shape):
+    """Apply tf.broadcast to all bottom-level objects in nested dictionaries"""
+    return tf.broadcast_to(d,shape)
+
+def deep_equals(d,val=None):
+    """Return True (and the value) if all bottom-level objects in nested dictionaries are equal"""
+    if isinstance(d, Mapping):
+        out_val = val
+        out_equal = True
+        for k,v in d.items():
+            deep_equal, deep_val = deep_equals(v,out_val)
+            out_val = deep_val
+            out_equal = out_equal and deep_equal
+            if not out_equal:
+                break # Short-circuit for non-equal outcome
+    else:
+        if val is None:
+            out_equal = True
+            out_val = d
+        elif tf.reduce_all(tf.equal(d,val)):
+            out_equal = True
+            out_val = val
+        else:
+            out_equal = False
+            out_val = None
+    return out_equal, out_val
+
+def sample_batch_shape(sample,event_shapes):
+    """Work out the effective 'batch shape' for a sample, given a dictionary of
+       event shapes.
+       Error if consistent batch dims are not found, or if any required event shapes
+       are missing.
+    """
+    batch_shape = None
+    for name,x in sample.items():
+        eshape = event_shapes[name]
+        if len(eshape)>0 and x.shape[-len(eshape):] != eshape:
+            msg = "Supplied event shape for distribution {0} ({1}) does not match trailing dimensions of sample! ({2})!".format(name,eshape,x.shape)
+            raise ValueError(msg)
+        bshape = x.shape[:-len(eshape)]
+        if batch_shape is None:
+            batch_shape = bshape
+        elif batch_shape!=bshape:
+            msg = "Inferred batch shapes for samples are not consistent! Inferred batch shape of {0} for samples from distribution {1}, but previously found batch shapes of {2}".format(bshape,name,batch_shape)
+            raise ValueError(msg)
+    return batch_shape
 
 def loose_squeeze(tensor,axis):
     """Applies squeeze to bottom-level dict objects along axis, but isn't an error if the axis
@@ -395,6 +510,8 @@ def cat_pars_2d(pars,remove_axis0=False):
        If remove_axis0 is True, then AFTER expanding everything to 2D, axis 0
        is squeezed. It will be an error to use this option for input for which
        the (expanded) axis 0 is not a singleton.
+
+       TODO: Allow 2D parameters? Could automatically flatten/unflatten them to 1D.
     """
     parlist = []
     maxdims = {}
