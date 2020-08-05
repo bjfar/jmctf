@@ -1,11 +1,13 @@
 """Analysis class for 'normal' analyses, whose PDF can be described
-   by a single Normal distribution, with a single additive nuisance
-   parameter (e.g. could be associated with theory error, or a
-   control measurement).
+   by a single Normal distribution.
 
    This is as simple as it gets, so this class is a good example for
    understanding what information classes derived from BaseAnalysis are 
    required to provide.
+
+   It is, however, a bit trivial since it has no nuisance parameters, so
+   it doesn't contribute anything to nuisance parameter fits. For the next
+   step up, see NormalTEAnalysis, which has one nuisance parameter.
 """
 
 import numpy as np
@@ -28,10 +30,8 @@ class NormalAnalysis(BaseAnalysis):
         # Scaling required to make MLE for mu parameter have variance of about 1 (to help out optimiser)
         self.sigma = sigma
         self.mu_scaling = sigma
-        self.theta_scaling = sigma # Assumes extra model-dependent error will be somewhat similar to sigma
         self.x_obs = x_obs
         self.exact_MLEs =  True # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
-        self.const_pars = ['sigma_t']
 
     def tensorflow_model(self,pars):
         """Output tensorflow probability model object, to be combined with models from
@@ -50,16 +50,12 @@ class NormalAnalysis(BaseAnalysis):
         # semantics of tensorflow_probability.
         tfds = {}
         mu = pars['mu'] * self.mu_scaling
-        theta = pars['theta'] * self.theta_scaling 
  
-        # Normal models
-        norm       = tfd.Normal(loc=mu+theta, scale=self.sigma) # TODO: shapes probably need adjustment
-        norm_theta = tfd.Normal(loc=theta, scale=pars['sigma_t'])
+        # Normal model
+        norm = tfd.Normal(loc=mu, scale=self.sigma)
 
         # Store model in distribution dictionary
-        # Naming is import for (TODO: can't remember?)
         tfds["x"] = norm
-        tfds["x_theta"] = norm_theta
         return tfds
 
     def add_default_nuisance(self,pars):
@@ -69,26 +65,12 @@ class NormalAnalysis(BaseAnalysis):
            parameters if they are not specified.
 
            Input is full parameter dictionary, with SCALED
-           parameters
+           parameters.
+
+           However, there are none for this Analysis class.
+           So returns pars unchanged.
         """
-         
-        pars_out = {}
-        if 'theta' not in pars.keys():
-            # trigger shortcut to set nuisance parameters to zero. Useful for sample generation. 
-            theta = tf.constant(0*pars['mu'])
-        else:
-            theta = pars['theta']
-
-        if 'sigma_t' not in pars.keys():
-            # Default for when no extra "theory" uncertainty is provided
-            sigma_t = tf.constant([c.reallysmall],dtype=c.TFdtype) # Cannot use exactly zero, gets nan from TF due to zero width normal dist. Use something "near" smallest positive 32-bit float instead.
-        else:
-            sigma_t = pars['sigma_t'] 
-
-        pars_out['mu'] = pars['mu']
-        pars_out['sigma_t'] = sigma_t # Always treated as fixed, so no scaling ever needed
-        pars_out['theta'] = theta
-        return pars_out
+        return pars
 
     def scale_pars(self,pars):
         """Apply scaling (to adjust MLEs to have var~1) to any valid 
@@ -99,10 +81,6 @@ class NormalAnalysis(BaseAnalysis):
         scaled_pars = {}
         if 'mu' in pars.keys():
             scaled_pars['mu'] = pars['mu'] / self.mu_scaling
-        if 'theta' in pars.keys(): 
-            scaled_pars['theta'] = pars['theta'] / self.theta_scaling
-        if 'sigma_t' in pars.keys():
-            scaled_pars['sigma_t'] = pars['sigma_t'] # No scaling; always fixed.
         return scaled_pars
         
     def descale_pars(self,pars):
@@ -110,10 +88,6 @@ class NormalAnalysis(BaseAnalysis):
         descaled_pars = {}
         if 'mu' in pars.keys():
             descaled_pars['mu'] = pars['mu'] * self.mu_scaling
-        if 'theta' in pars.keys(): 
-            descaled_pars['theta'] = pars['theta'] * self.theta_scaling
-        if 'sigma_t' in pars.keys():
-            descaled_pars['sigma_t'] = pars['sigma_t'] # No scaling; always fixed.
         return descaled_pars
 
     def get_Asimov_samples(self,signal_pars):
@@ -125,16 +99,13 @@ class NormalAnalysis(BaseAnalysis):
         """
         Asamples = {}
         mu = signal_pars['mu'] * self.mu_scaling
-        theta = tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0) # Expand to match shape of signal list 
         Asamples["x"] = tf.expand_dims(mu,0) # Expand to sample dimension size 1
-        Asamples["x_theta"] = tf.expand_dims(theta,0) # Expand to sample dimension size 1
         return Asamples
 
     def get_observed_samples(self):
         """Construct dictionary of observed data for this analysis"""
         Osamples = {}
         Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=c.TFdtype),0),0)
-        Osamples["x_theta"] = tf.expand_dims(tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0),0)
         return Osamples
 
     def get_interest_parameter_structure(self):
@@ -147,38 +118,20 @@ class NormalAnalysis(BaseAnalysis):
            (i.e. parameters that can be altered along with the signal hypothesis in nuisance
            parameter fits, but which are kept fixed during all fitting.
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
-        return {"sigma_t": 1}
+        return {} # None for this analysis
 
     def get_nuisance_parameter_structure(self):
         """Get a dictionary describing the nuisance parameter structure of this analysis.
            Basically just the keys of the parameter dictionaries plus dimension of each entry"""
-        return {"theta": 1} # theta is a scalar
+        return {} # None for this analysis
 
     def get_nuisance_parameters(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model
            (initial guesses assume fixed "signal" parameters)
         """
-        x = sample_dict["x"]
-        x_theta = sample_dict["x_theta"]
-        mu = fixed_pars['mu'] # non-scaled!
-        if 'sigma_t' in fixed_pars.keys():
-            sigma_t = fixed_pars['sigma_t']
-        else:
-            sigma_t = c.reallysmall # TODO: Cannot use exactly zero 
-        theta_MLE = ((x - mu)*sigma_t**2 + x_theta*self.sigma**2) / (sigma_t**2 + self.sigma**2)
-        free_pars = {"theta": theta_MLE} # Use exact "starting guess", assuming mu is fixed.
-        all_fixed_pars = {"mu": mu, "sigma_t": sigma_t} # mu is fixed in nuisance-parameter-only fits
-
-        # chi2_x = (mu + theta_MLE - x)**2 / self.sigma**2
-        # chi2_xt = (theta_MLE - x_theta)**2 / sigma_t**2
-        # #print("chi2_x:", chi2_x)
-        # #print("chi2_xt:", chi2_xt)
-        # #print("chi2:", chi2_x + chi2_xt)
-        # const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
-        # const_xt = np.log(2*np.pi) + 2*np.log(sigma_t)
-        # #print("-2logL_x:", chi2_x + const_x)
-        # #print("-2logL_xt:", chi2_xt + const_xt)
-        # #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
+        mu = fixed_pars['mu'] # non-scaled! 
+        free_pars = {} # No nuisance parameters free
+        all_fixed_pars = {"mu": mu} # mu is fixed in nuisance-parameter-only fits
         return free_pars, all_fixed_pars
 
     def get_all_parameters(self,sample_dict,fixed_pars):
@@ -190,27 +143,7 @@ class NormalAnalysis(BaseAnalysis):
            Should return "physical", i.e. non-scaled, initial guesses for parameters
         """
         x = sample_dict["x"]
-        x_theta = sample_dict["x_theta"]
-        mu_MLE = x - x_theta
-        theta_MLE = x_theta
-        free_pars = {"mu": mu_MLE, "theta": theta_MLE} 
-        if 'sigma_t' in fixed_pars.keys():
-            sigma_t = fixed_pars['sigma_t']
-        else:
-            sigma_t = c.reallysmall # Default TODO: Cannot use exactly zero 
-        fixed_pars_out = {"sigma_t": sigma_t}
-        
-        # chi2_x = (mu_MLE + theta_MLE - x)**2 / self.sigma**2
-        # chi2_xt = (theta_MLE - x_theta)**2 / sigma_t.numpy()**2
-        # #print("chi2_x:", chi2_x)
-        # #print("chi2_xt:", chi2_xt)
-        # #print("chi2:", chi2_x + chi2_xt)
-        # const_x = np.log(2*np.pi) + 2*np.log(self.sigma)
-        # const_xt = np.log(2*np.pi) + 2*np.log(sigma_t.numpy())
-        # #print("-2logL_x:", chi2_x + const_x)
-        # #print("-2logL_xt:", chi2_xt + const_xt)
-        # #print("-2logL:", chi2_x + chi2_xt + const_x + const_xt)
+        mu_MLE = x
+        free_pars = {"mu": mu_MLE}
+        fixed_pars_out = {} # None
         return free_pars, fixed_pars_out
-
-
-

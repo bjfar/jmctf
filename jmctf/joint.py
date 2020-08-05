@@ -698,8 +698,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("ilist:",ilist)
         #print("jlist:",jlist)
         # Use gather to extract row/column slices from Hessian
-        subH_i = tf.gather(H,      ilist, axis=idim)
-        subH   = tf.gather(subH_i, jlist, axis=jdim)
+        if len(ilist)>0:
+            subH_i = tf.gather(H,      ilist, axis=idim)
+            if len(jlist)>0:
+                subH = tf.gather(subH_i, jlist, axis=jdim)
+            else:
+                subH = None
+        else:
+            subH = None
         return subH
 
     def sub_grad(self,grad,pari,idim=-1):
