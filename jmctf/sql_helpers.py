@@ -105,29 +105,33 @@ def load(cursor,table_name,cols,keys=None,primary=None):
         splitdata = np.split(keys, np.where(np.diff(keys) != 1)[0]+1)
         ranges = [(np.min(x), np.max(x)) for x in splitdata]
 
+    if len(cols)==0:
+        msg = "SQL load from table `{0}` failed: no columns specified! (cols={1})".format(table_name,cols)
+        raise ValueError(msg)
+
     # Check columns
     #c.execute('PRAGMA table_info({0})'.format(table_name))
     #results = c.fetchall()
-    #print("cols: ", results)
+    print("cols: ", cols)
 
     command = "SELECT "
     for col in cols:
         command += col+","
     command = command[:-1]
-    command += " from {0}".format(table_name)
+    command += " from `{0}`".format(table_name)
 
     if keys is not None:
         command += " WHERE "
         for i,(start, stop) in enumerate(ranges):
             command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
             if i<len(ranges)-1: command += " OR "
-    #print("command:", command)
+    print("command:", command)
     cursor.execute(command)
     return cursor.fetchall() 
 
 def table_info(cursor,table):
     """Return table metadata"""
-    command = "PRAGMA table_info({0})".format(table)
+    command = "PRAGMA table_info(`{0}`)".format(table)
     cursor.execute(command)
     return cursor.fetchall()
 

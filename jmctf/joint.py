@@ -818,10 +818,17 @@ class JointDistribution(tfd.JointDistributionNamed):
             raise ValueError(msg)
         event_shape = joint.event_shape_tensor()
         s_batch_shape = c.sample_batch_shape(samples,event_shape)
+        if s_batch_shape==(): s_batch_shape = [0] # Interpret as one batch dim when zero.
         n_new_dims = len(batch_shape) - len(s_batch_shape)
         matched_samples = samples
         for i in range(n_new_dims):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
         q = -2*joint.log_prob(matched_samples)
+        print("batch_sample:", batch_shape)
+        print("s_batch_shape:", s_batch_shape)
+        print("n_new_dims:", n_new_dims)
+        print("samples:", samples)
+        print("matched_samples:", matched_samples)
+        print("q:", q)
         return q
 

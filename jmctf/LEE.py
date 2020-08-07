@@ -16,6 +16,7 @@ import io
 import codecs
 import h5py
 from progress.bar import Bar
+from progress.spinner import Spinner
 from . import sql_helpers as sql
 from . import common as c
 from .binned_analysis import BinnedAnalysis
@@ -358,7 +359,7 @@ class LEECorrectorMaster(LEECorrectorBase):
 
         self.LEEanalyses = {}
         self.profiled_table = 'profiled' # For combined results profiled over all alternate hypotheses
-        self.nullname = 'null' # For combined results for null hypothesis
+        self.nullname = nullname # For combined results for null hypothesis
         self.local_table = 'local_' # Base name for tables related to specific alternate hypotheses whose local properties we want to investigate
         self.analyses = analyses # For introspection only. Otherwise LEECorrectorAnalysis interface is used
         for a in self.analyses:
@@ -494,18 +495,18 @@ class LEECorrectorMaster(LEECorrectorBase):
             quads += [a.compute_quad(pars,events)]
         Ns = alt_hyp_gen.count
         Nchunk = alt_hyp_gen.chunk_size
-        Nbatches = Ns // Nchunk
-        rem = Ns % Nchunk
-        if rem!=0: Nbatches+=1
-        j=0
-        bar = Bar('Processing alternate hypotheses in batches of {0}'.format(Nchunk), max=Nbatches)
+        if Ns is None:
+            bar = Spinner('Processing alternate hypotheses in batches of {0}'.format(Nchunk)) # Unknown size
+        else:
+            Nbatches = Ns // Nchunk
+            rem = Ns % Nchunk
+            if rem!=0: Nbatches+=1
+            bar = Bar('Processing alternate hypotheses in batches of {0}'.format(Nchunk), max=Nbatches)
         alt_hyp_gen.reset()
         min_neg2logLs = None
         for i in range(Nbatches):
-            if rem!=0 and i==Nbatches: size = rem
-            else: size = Nchunk
             comb_neg2logLs = None
-            r = alt_hyp_gen.next() #{name: {par: dat[j:j+size] for par,dat in signals[name].items()}}
+            r = alt_hyp_gen.next() 
 
             # Check that user-supplied alt_hyp_gen function gave us
             # usable input. Since this is user-supplied we do particularly
@@ -569,6 +570,7 @@ class LEECorrectorMaster(LEECorrectorBase):
 
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
+                print("EventIDs:", EventIDs)
                 a.record_alternate_logLs(neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
                 #print("...done")
                 #print("alterate hypothesis neg2logLs:", neg2logLs)
@@ -584,7 +586,6 @@ class LEECorrectorMaster(LEECorrectorBase):
             else:
                 all_neg2logLs = comb_neg2logLs
             min_neg2logLs = tf.reduce_min(all_neg2logLs,axis=-1)
-            j += size 
             bar.next()
         bar.finish() 
         return min_neg2logLs  
@@ -801,7 +802,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         super().__init__(path,analysis.name)
 
         self.event_table = 'events'
-        self.nullname = 'null' # String to identify null hypothesis tables
+        self.nullname = nullname # String to identify null hypothesis tables
         self.local_table = 'local_' # Base name for tables containing local TS data)
         self.null_table = self.local_table + self.nullname
         self.combined_table = comb_name+"_combined" # May vary, so that slightly different combinations can be done side-by-side
@@ -896,7 +897,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             condition = None # Ignore conditions if reference table doesn't exist yet. Cannot possible match on them.
         else:
             # See if any data is in the reference table yet:
-            cur.execute("SELECT Count(EventID) FROM "+reftable)
+            cur.execute("SELECT Count(EventID) FROM `{0}`".format(reftable))
             results = cur.fetchall()
             nrows = results[0][0]
             if nrows == 0:
@@ -912,7 +913,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if condition is not None:
            # Apply extra condition to get only events where "neg2LogL" column is NULL (or the EventID doesn't exist) in the 'background' table
            command += """
-                      left outer join {0} as B
+                      left outer join `{0}` as B
                           on A.EventID=B.EventID
                       where
                           B.{1} 
@@ -997,28 +998,32 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             for i in range(size):
                 cols += ["{0}_{1}".format(par,i)]
 
-        conn = self.connect_to_db()
-        cur = conn.cursor()
-        if observed_mode:
-            results = sql.load(cur,self.local_table+self.nullname+"_observed",cols,[0],'EventID')
-        else:
-            results = sql.load(cur,self.local_table+self.nullname,cols,EventIDs,'EventID')
-        self.close_db(conn) 
+        if len(cols)>0:
+            conn = self.connect_to_db()
+            cur = conn.cursor()
+            if observed_mode:
+                results = sql.load(cur,self.local_table+self.nullname+"_observed",cols,[0],'EventID')
+            else:
+                results = sql.load(cur,self.local_table+self.nullname,cols,EventIDs,'EventID')
+            self.close_db(conn) 
 
-        # Convert back to dict of tensors
-        if len(results)>0:
-            # Convert back into dictionary of tensorflow tensors
-            # Start by converting to one big tensor
-            alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
-            i = 0
-            pars = {}
-            for par,size in nuis_structure.items():
-                #pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
-                pars[par] = alldata[:,i:i+size]
-                i+=size
-            nuis_pars = {self.analysis.name: pars}
+            # Convert back to dict of tensors
+            if len(results)>0:
+                # Convert back into dictionary of tensorflow tensors
+                # Start by converting to one big tensor
+                alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
+                i = 0
+                pars = {}
+                for par,size in nuis_structure.items():
+                    #pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
+                    pars[par] = alldata[:,i:i+size]
+                    i+=size
+                nuis_pars = {self.analysis.name: pars}
+            else:
+                nuis_pars = None # No fitted parameters found in output; probably fits weren't done yet. Let calling code decide if this is an error.
         else:
-            nuis_pars = None
+            # No nuisance parameters!
+            nuis_pars = {}
 
         return nuis_pars
 
@@ -1043,6 +1048,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            and events supplied have dimensions consistent with this.
         """
 
+
         par_size = c.deep_size(pars,axis=0)
 
         # Squeeze out the "hypothesis list" axis from events, to give output Hessians
@@ -1054,15 +1060,18 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if par_size is None or e_size is None:
             raise ValueError("pars or events were empty! pars={0}, events={1}".format(pars,events))
 
-        if par_size!=e_size:
-            msg = "Parameters and events did not have sizes consistent for compute_quad: axis 0 size must match!"
+        if par_size!=-1 and par_size!=e_size:
+            msg = "Parameters and events did not have sizes consistent for compute_quad: axis 0 size must match! (par_size={0}, e_size={1})".format(par_size,e_size)
             raise ValueError(msg)
+        # par_size==-1 is ok, just means there were no nuisance parameters.
 
         print("pars:", pars)
         print("events_sq:", events_sq)
 
         joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
         quadf = joint_fitted_b.quad_loglike_f(events_sq)
+
+        print("quadf:", quadf)
 
         return quadf 
 
@@ -1123,6 +1132,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
                      mask = (this_range[0] <= EventIDs) & (EventIDs < this_range[1])
                  if np.sum(mask)>0:
+                     print("EventIDs:", mask)
+                     print("mask:", mask)
+                     print("neg2logLs:", neg2logLs)
                      neg2logL_batch = neg2logLs[mask]
                      if observed_mode:
                          eventID_batch = ['observed']

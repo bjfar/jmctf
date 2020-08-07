@@ -60,7 +60,7 @@ print("null_hyp:", null_hyp)
 print("alt_hyp:", alt_hyp)
 
 # Generate pseudodata samples from null hypothesis
-# lee.add_events(1e4)
+lee.add_events(1e4)
 
 # Fit null hypothesis nuisance parameters to recorded samples
 lee.process_null()
