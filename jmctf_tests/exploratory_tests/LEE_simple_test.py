@@ -20,23 +20,21 @@ mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
 class SigGen:
     """Object to supply signal hypotheses in chunks
        Replace with something that e.g. reads from HDF5 file
-       in real cases."""
+       in real cases. Needs to be iterable"""
     def __init__(self,N,alt_hyp):
         self.count = N
         self.chunk_size = 10
         self.alt_hyp = alt_hyp
         self.j = 0
 
-    def reset(self): 
-        self.j = 0
-
-    def next(self):
+    def __iter__(self):
         j = self.j
         size = self.chunk_size
         chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.alt_hyp.items()}
         self.j += size
+        this_chunk_size = c.deep_size(chunk) 
         print("chunk:", chunk)
-        return chunk, list(range(j,j+size))
+        return chunk, list(range(j,j+this_chunk_size))
 
 import tensorflow as tf
 import jmctf.common as c

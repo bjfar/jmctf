@@ -1,7 +1,7 @@
 """Testing LEEcorrector objects"""
 
 from jmctf.LEE import collider_analyses_from_long_YAML, LEECorrectorMaster
-from jmctf.common import deep_merge, CDFf
+import jmctf.common as c
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -62,22 +62,25 @@ print("signals:",signals)
 class SigGen:
     """Object to supply signal hypotheses in chunks
        Replace with something that e.g. reads from HDF5 file
-       in real cases."""
-    def __init__(self,Ns,signals):
-        self.count = Ns
+       in real cases. Needs to be iterable"""
+    def __init__(self,N,alt_hyp):
+        self.count = N
         self.chunk_size = 1000
-        self.signals = signals
+        self.alt_hyp = alt_hyp
         self.j = 0
 
-    def reset(self): 
-        self.j = 0
+    def __iter__(self):
+        j = 0
+        return self
 
-    def next(self):
+    def __next__(self):
         j = self.j
         size = self.chunk_size
-        chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.signals.items()}
+        chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.alt_hyp.items()}
         self.j += size
-        return chunk, list(range(j,j+size))
+        this_chunk_size = c.deep_size(chunk) 
+        print("chunk:", chunk)
+        return chunk, list(range(j,j+this_chunk_size))
 
 nosignal = {a.name: {'s': tf.constant([tuple(0. for sr in a.SR_names)],dtype=float)} for a in analyses_read}
 DOF = 3
@@ -210,7 +213,7 @@ sns.lineplot(qx,qy,color='g',ax=ax1, label="asymptotic")
 sns.lineplot(qx,qy,color='g',ax=ax2, label="asymptotic")
 
 # Observed empirical and asymptotic p-values
-epval = 1 - CDFf(chi2_quad)(chi2_quad_obs)
+epval = 1 - c.CDFf(chi2_quad)(chi2_quad_obs)
 apval = tfd.Chi2(df=DOF).log_prob(chi2_quad_obs)
 esig = -tfd.Normal(0,1).quantile(epval)
 asig = -tfd.Normal(0,1).quantile(apval)

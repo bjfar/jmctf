@@ -420,8 +420,11 @@ def squeeze_to(tensor,d,dont_squeeze=[]):
     if nextra<0:
         msg = "Could not squeeze tensor to {0} dimensions! Starting dimension ({1}) is larger than target dimension!".format(d,len(tensor.shape))
         raise ValueError(msg)
-    if nextra==0:
+    elif nextra==0:
         out = tensor # Already correct dimension
+    elif len(squeezeable_dims)<nextra:
+        msg = "Could not squeeze {0}d tensor to {1} dimensions! Not enough squeezeable dimensions! (len(squeezeable_dims) = {2}, tensor.shape = {3}, dont_squeeze = {4})".format(len(tensor.shape), d, len(squeezeable_dims), tensor.shape, dont_squeeze)
+        raise ValueError(msg)
     else:
         out = tf.squeeze(tensor,axis=squeezeable_dims[:nextra])
     return out

@@ -788,8 +788,16 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         if A is None or B is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
+            # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
+            # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
+            # is missing when there are no nuisance parameters, so we need to add it.
+            pars2d, did_2d_expand = c.atleast_2d(signal,report=True)
+            expanded_pars = c.deep_expand_dims(pars2d,axis=0)
+            print("signal:", signal)
+            print("pars2d:", pars2d)
+            print("expanded_pars:", expanded_pars)
             # Compute -2*log_prob
-            joint = JointDistribution(self.analyses.values(),signal)
+            joint = JointDistribution(self.analyses.values(),expanded_pars)
         else:
             s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
             s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
@@ -818,17 +826,17 @@ class JointDistribution(tfd.JointDistributionNamed):
             raise ValueError(msg)
         event_shape = joint.event_shape_tensor()
         s_batch_shape = c.sample_batch_shape(samples,event_shape)
-        if s_batch_shape==(): s_batch_shape = [0] # Interpret as one batch dim when zero.
+        if s_batch_shape==() and (A is None or B is None) : s_batch_shape = [0] # Interpret as one batch dim when zero. This is a little hacky, I probably need to tighten up the shape propagation.
         n_new_dims = len(batch_shape) - len(s_batch_shape)
         matched_samples = samples
         for i in range(n_new_dims):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
         q = -2*joint.log_prob(matched_samples)
-        print("batch_sample:", batch_shape)
+        print("batch_shape:", batch_shape)
         print("s_batch_shape:", s_batch_shape)
         print("n_new_dims:", n_new_dims)
         print("samples:", samples)
         print("matched_samples:", matched_samples)
         print("q:", q)
-        return q
+        return c.squeeze_to(q,2,dont_squeeze=[0])
 

@@ -493,20 +493,23 @@ class LEECorrectorMaster(LEECorrectorBase):
             events = c.add_prefix(name,a.load_events(EventIDs))
             print("loaded events:", events)
             quads += [a.compute_quad(pars,events)]
-        Ns = alt_hyp_gen.count
-        Nchunk = alt_hyp_gen.chunk_size
-        if Ns is None:
-            bar = Spinner('Processing alternate hypotheses in batches of {0}'.format(Nchunk)) # Unknown size
-        else:
+
+        if hasattr(alt_hyp_gen,'count') and hasattr(alt_hyp_gen,'chunk_size'):
+            Ns = alt_hyp_gen.count
+            Nchunk = alt_hyp_gen.chunk_size
             Nbatches = Ns // Nchunk
             rem = Ns % Nchunk
             if rem!=0: Nbatches+=1
             bar = Bar('Processing alternate hypotheses in batches of {0}'.format(Nchunk), max=Nbatches)
-        alt_hyp_gen.reset()
+        else:
+            bar = Spinner('Processing alternate hypotheses') # Unknown size
+        
+
         min_neg2logLs = None
-        for i in range(Nbatches):
+        loop_ran = False
+        for r in alt_hyp_gen:
+            loop_ran = True
             comb_neg2logLs = None
-            r = alt_hyp_gen.next() 
 
             # Check that user-supplied alt_hyp_gen function gave us
             # usable input. Since this is user-supplied we do particularly
@@ -587,7 +590,13 @@ class LEECorrectorMaster(LEECorrectorBase):
                 all_neg2logLs = comb_neg2logLs
             min_neg2logLs = tf.reduce_min(all_neg2logLs,axis=-1)
             bar.next()
-        bar.finish() 
+        bar.finish()
+        if not loop_ran:
+            msg = "Problem processing alternate hypotheses! The user-supplied generator of hypothesis parameters did not yield any output!"
+            raise ValueError(msg)
+        elif min_neg2logLs is None:
+            msg = "Problem processing alternate hypotheses! Result of batch was None!"
+            raise ValueError(msg)
         return min_neg2logLs  
  
     def process_alternate_observed(self,alt_hyp_gen,quad_only=True,dbtype='hdf5'):
@@ -615,7 +624,7 @@ class LEECorrectorMaster(LEECorrectorBase):
            for which no alternate hypothesis fit results are yet recorded."""
         # First process the observed dataset
         print("Processing alternate hypotheses for *observed* dataset")
-        self.process_alternate_observed(alt_hyp_gen,quad_only,dbtype)
+        self.process_alternate_observed(alt_hyp_gen(),quad_only,dbtype)
         print("...done!")
         Nevents = self.count_events_comb()
         still_processing = True
@@ -631,7 +640,7 @@ class LEECorrectorMaster(LEECorrectorBase):
                 offset += event_batch_size
             if EventIDs is None: still_processing = False
             if still_processing:
-                min_neg2logLs = self._process_alternate_batch(alt_hyp_gen,EventIDs,dbtype)              
+                min_neg2logLs = self._process_alternate_batch(alt_hyp_gen(),EventIDs,dbtype)              
                 # Write the compute min_neg2logLs to disk for this batch of events
                 data = pd.DataFrame(min_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_quad'])
                 data.index.name = 'EventID' 
