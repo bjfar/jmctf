@@ -291,9 +291,14 @@ class JointDistribution(tfd.JointDistributionNamed):
                 self.Asamples.update(c.add_prefix(a.name,a.get_Asimov_samples(self.pars[a.name])))
             super().__init__(dists) # Doesn't like it if I use self.dists, maybe some construction order issue...
             self.dists = dists
+
+            # Check that a consistent batch_shape can be found!
+            # Will throw an error if it cannot.
+            batch_shape = self.bcast_batch_shape_tensor()
+
         else:
             self.pars = None
-        # If no pars provided can still fit the analyses, but obvious cannot sample or compute log_prob etc.
+        # If no pars provided can still fit the analyses, but obviously cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
         #print("self.pars = ", self.pars)
@@ -360,15 +365,11 @@ class JointDistribution(tfd.JointDistributionNamed):
                     raise TypeError(msg) from e
             all_pars_1[a.name] = p
 
-        # Next, apply shape changes if needed
-        all_pars_2, squeezed = c.prepare_par_shapes(all_pars_1)
-
         # Next, add the nuisance parameters in if needed, and check their shapes too
         # (but this time the squeezing of axis=0 only occurs if it did for the user parameters)
-        all_pars_3 = {}
+        all_pars_4 = {}
         for a in self.analyses.values():
-            all_pars_3[a.name] = a.add_default_nuisance(all_pars_2[a.name])
-        all_pars_4, squeezed_2 = c.prepare_par_shapes(all_pars_3, squeeze=squeezed)
+            all_pars_4[a.name] = a.add_default_nuisance(all_pars_1[a.name])
 
         # Finally, do scaling if needed
         all_pars_out = {}
@@ -468,7 +469,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         nuis  = {a.name: a.get_nuisance_parameter_structure() for a in self.analyses.values()} 
         return interest, fixed, nuis
 
-    def fit_nuisance(self,samples,fixed_pars,log_tag='',verbose=False):
+    def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object)"""
         fp = c.convert_to_TF_constants(fixed_pars)
@@ -485,7 +486,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_dict["all"] = self.descale_pars(all_pars)
         par_dict["fitted"] = self.descale_pars(fitted_pars)
         par_dict["fixed"]  = self.descale_pars(const_pars)
-        return q, joint_fitted, par_dict 
+        return -0.5*q, joint_fitted, par_dict 
 
 
     # TODO: Deprecated, but may need something like this again.
@@ -538,7 +539,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_dict["all"] = self.descale_pars(all_pars)
         par_dict["fitted"] = self.descale_pars(fitted_pars)
         par_dict["fixed"]  = self.descale_pars(const_pars)
-        return q, joint_fitted, par_dict 
+        return -0.5*q, joint_fitted, par_dict 
 
     def Hessian(self,samples):
         """Obtain Hessian matrix (and grad) at input parameter points
@@ -851,19 +852,26 @@ class JointDistribution(tfd.JointDistributionNamed):
         """
         
         all_batch_shapes = self.batch_shape_tensor()
+        print("all_batch_shapes:", all_batch_shapes)
 
         # First pass: find the batch shape with the most dimensions. All shapes
         # will be broadcast to this number of dims.
         ndims = 0
         for d,shape in all_batch_shapes.items():
+            print("d: {0}, shape: {1}, shape.shape[0]: {2}".format(d,shape,shape.shape[0]))
             if shape.shape[0] > ndims: ndims = shape.shape[0]
         
         # Second pass: attempt to broadcast everything to ndims
         out_shape = tuple(1 for i in range(ndims))
+        print("out_shape:", out_shape)
         for d,shape in all_batch_shapes.items():
-            out_shape = c.get_bcast_shape(shape,out_shape)
-
-        # TODO: better error message
+             msg = "Could not obtain consistent batch_shape across all components of the JointDistribution! Please check that all your distribution parameters will result in distribution components whose batch_shape dimensions can be broadcast against each other. Failure occurred when broadcasting distribution named '{0}' with shape {1}, to shape {2}".format(d,shape,out_shape)
+             try:
+                 out_shape = c.get_bcast_shape(shape,out_shape)
+             except ValueError as e:
+                 raise ValueError(msg) from e
+             if -1 in out_shape:
+                 raise ValueError(msg + ": -1 was detected in shape!")
 
         return out_shape
 

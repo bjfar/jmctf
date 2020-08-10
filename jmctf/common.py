@@ -275,32 +275,6 @@ def atleast_2d(pars,report=False,new1Daxis=1):
     else:
         return out
 
-def prepare_par_shapes(pars,squeeze=True):
-    """Prepare the shapes of parameters passed into JointDistribution-type objects
-       The treatment is as follows:
-       1. Is any "preliminary" expansion of dims to 2D required?
-       2. If 1 is True:
-             2a. Do the expansion
-             2b. Squeeze dim 0 if possible (treatment for single hypothesis input)
-          If 1 is False:
-             Do nothing
-       In this way, single hypotheses can still be input in hypothesis list form if
-       desired, and samples will match this shape. But also allows for "shortcut"
-       syntax for single hypotheses, which also results in samples with the hypothesis
-       axis omitted as it was in the input.
-
-       If *any* dimension expansion of inputs is required, then dim 0 will get squeezed.
-       So make sure to prepare list form for all inputs if you don't want this to happen.
-
-       If squeeze=False then squeeze step is disabled
-    """
-    pars_2d, did_expansion = atleast_2d(pars,report=True)
-    if did_expansion and squeeze:
-        pars_out = squeeze_axis_0(pars_2d)
-    else:
-        pars_out = pars_2d  
-    return pars_out, did_expansion
-
 def extract_ith(d,i,keep_axis=False):
     """Extract ith entry from bottom level of all nested dictionaries.
        If keep_axis=True then the axis from which the entry is extracted
@@ -356,23 +330,27 @@ def deep_shape(d,axis=0,numpy_bcast=True):
 def get_bcast_shape(shape1,shape2,numpy_bcast=True):
     """Of two tensor/array shapes, return the shape to which they can be broadcast under numpy rules
        (or throw an error if bcast is not possible"""
+    print("shape1:", shape1, len(shape1))
+    print("shape2:", shape2, len(shape2))
     if len(shape1)!=len(shape2):
         if numpy_bcast:
             # Apply numpy broadcasting rules to match dimensions and add "implicit" dimensions
             if len(shape1)<len(shape2):
-                # Expand shape with ones on the left
+                # Expand shape1 with ones on the left
                 newshape1 = [1 for s in shape2]
-                newshape1[-len(shape1)::] = shape1
+                if len(shape1)!=0: newshape1[-len(shape1)::] = shape1
                 shape1 = tuple(newshape1)
             else:
-                # Expand shape_v with ones on the left
+                # Expand shape2 with ones on the left
                 newshape2 = [1 for s in shape1]
-                newshape2[-len(shape2)::] = shape2
+                if len(shape2)!=0: newshape2[-len(shape2)::] = shape2
                 shape2 = tuple(newshape2) 
         else:
             # Without full numpy broadcasting, shape is indeterminate 
             msg = "Shapes are not compatible! They have different numbers of dimensions (found {0} vs {1})".format(shape1,shape2)
             raise ValueError(msg)
+    print("expanded shape1:", shape1, len(shape1))
+    print("expanded shape2:", shape2, len(shape2))
     # Number of dimensions should now match. Now compare their sizes.
     newshape = [-1 for s in shape1]
     for i,(si,sv) in enumerate(zip(shape1,shape2)):
@@ -385,6 +363,10 @@ def get_bcast_shape(shape1,shape2,numpy_bcast=True):
         else:
             msg = "Shapes are not compatible! Different sized dimensions (other than size 1) were found! (found {0} vs {1}, where (at least) dim {3} are not compatible".format(shape1,shape2,i)
             raise ValueError(msg)
+    if -1 in newshape:
+        msg = "Failed to broadcast shapes! -1 detected! (shape1 = {0}, shape2={1}, newshape = {2})".format(shape1,shape2,newshape)
+        raise ValueError(msg)
+    print("newshape: {0}".format(newshape))
     return tuple(newshape)
 
 def squeeze_axis_0(pars):

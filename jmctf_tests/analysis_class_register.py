@@ -6,7 +6,7 @@
 # From the analysis-specific unit tests we can
 # acquire functions to create Analysis objects
 # for testing.
-from jmctf_tests.unit_tests import test_normalanalysis, test_normalteanalysis, test_binnedanalysis
+from jmctf_tests.unit_tests import test_normalanalysis, test_normalteanalysis, test_binnedanalysis, test_binnedanalysis_cov
 
 # Add your new analysis unit test module here to include it in all these tests
 # It must have 'get_obj' and 'get_model' functions that instantiate a test
@@ -14,7 +14,8 @@ from jmctf_tests.unit_tests import test_normalanalysis, test_normalteanalysis, t
 # respectively.
 analysis_tests = {"NormalAnalysis": test_normalanalysis, 
                   "NormalTEAnalysis": test_normalteanalysis,
-                  "BinnedAnalysis": test_binnedanalysis
+                  "BinnedAnalysis": test_binnedanalysis,
+                  "BinnedAnalysis_cov": test_binnedanalysis_cov
                  }
 
 # Useful generic objects for parameterising tests

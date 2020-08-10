@@ -135,7 +135,7 @@ class BinnedAnalysis(BaseAnalysis):
         # Poisson model
         poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+c.reallysmall) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
         # Treat SR batch dims as event dims
-        poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=-1)
+        poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=1)
         tfds["n"] = poises0i
 
         # Multivariate background constraints
@@ -152,13 +152,13 @@ class BinnedAnalysis(BaseAnalysis):
             if np.sum(~self.in_cov)>0:
                 nuis0 = tfd.Normal(loc = theta_safe[...,~self.in_cov], scale = bsys[...,~self.in_cov])
                 # Treat SR batch dims as event dims
-                nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=-1)
+                nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
                 tfds["x_nocov"] = nuis0i
         else:
             # Only have uncorrelated background constraints
             nuis0 = tfd.Normal(loc = theta_safe, scale = bsys)
             # Treat SR batch dims as event dims
-            nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=-1)
+            nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
             tfds["x"] = nuis0i 
         #print("hello3")
 
