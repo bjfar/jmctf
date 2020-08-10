@@ -66,54 +66,34 @@ def test_JointDistribution_init_pars(joint):
        Fixed parameters version"""
     pass # Just testing that "joint" is created so far.
 
-def test_JointDistribution_output_shapes_single(analysis_and_parameters):
+# Run test for various sample shapes
+shapes = [1,10,(1,),(10,),(5,3),(5,2,3),(1,5)]
+@pytest.mark.parametrize("sample_shape",shapes,ids=[str(s) for s in shapes])
+def test_JointDistribution_output_shapes_single(analysis_and_parameters,sample_shape):
     """Test that flow of shapes through JointDistribution samples -> pdf is correct"""
     analysis, pars = analysis_and_parameters
     joint = JointDistribution([analysis],{analysis.name: pars})
-    n = 10
+    n = sample_shape
     x = joint.sample(n)
     p = joint.log_prob(x)
-    # Input par tensors have dimension (m,...) where m is the number of separate hypotheses
-    # (other dimensions relate to 'intrinsic' dimension of each parameter)
-    # Sample tensors have dimension (n,m,...) where m " "      " "
-    #                                         and n is the number of independent draws from the distribution
-    # (other dimensions relate to the 'intrinsic' dimension of a single sample from each component of the distribution)
-    # In tensorflow_probability language TODO: figure it out
-    # Probability tensor should have dimension (n,m)
-    # Here we test the consistency of all these, assuming the functions above have run successfully
+    # Should obey tensorflow_probability shape rules here.
+    # See shapes_readme.md
 
-    # CORNER CASE
-    # If input parameters have dimension (), i.e. are scalars, then the other outputs have a slightly different structure since
-    # the extra dimension (that would be a singleton) is dropped:
-    # Sample tensors become: (n,...)
-    # Probability tensors become: (n)
+    # Check for consistent (broadcasted) batch_dims
+    batch_shape = joint.bcast_batch_shape_tensor()
+
+    try:
+        list_sample_shape = list(sample_shape)
+    except TypeError: # single int shapes cause this
+        list_sample_shape = [sample_shape]
+    p_shape_expected = list_sample_shape + list(batch_shape)
 
     # Will only see these print statements when test fails
     print(analysis.name, "pars:", pars)
     print(analysis.name, "x:", x)
     print(analysis.name, "p:", p)
+    print(analysis.name, "sample_shape:", sample_shape)
+    print(analysis.name, "batch_shape:", batch_shape)
+    print(analysis.name, "p_shape_expected:", p_shape_expected)
 
-    m = None
-    for name, par in pars.items():
-        if hasattr(par, "shape"):
-            # par is some sort of array-like thing
-            if par.shape == ():
-                this_m = 0
-            else:
-                this_m = par.shape[0]
-        elif hasattr(par, "__len__") and hasattr(par, '__getitem__'):
-            # par is some sort of list type of thing
-            this_m = len(par)
-        else:
-            this_m = 0 # Take it to be a scalar
-        if m is None:
-            m = this_m
-        else:
-            assert this_m == m
-
-    for name, xi in x.items():
-        assert xi.shape[0] == n
-        if m!=0: assert xi.shape[1] == m
-
-    assert p.shape[0] == n
-    if m!=0: assert p.shape[1] == m
+    assert p.shape == p_shape_expected

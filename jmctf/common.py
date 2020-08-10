@@ -473,7 +473,7 @@ def deep_equals(d,val=None):
     return out_equal, out_val
 
 def sample_batch_shape(sample,event_shapes):
-    """Work out the effective 'batch shape' for a sample, given a dictionary of
+    """Work out the effective 'sample shape + batch shape' for a sample, given a dictionary of
        event shapes.
        Error if consistent batch dims are not found, or if any required event shapes
        are missing.

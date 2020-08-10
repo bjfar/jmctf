@@ -14,8 +14,8 @@ def get_obj():
     return BinnedAnalysis(name,bins)
 
 def get_single_hypothesis():
-    pars = {'s': tf.constant([(0.,0.)],dtype=c.TFdtype), 
-            'theta': tf.constant([(0.,0.)],dtype=c.TFdtype)
+    pars = {'s': tf.constant((0.,0.),dtype=c.TFdtype), 
+            'theta': tf.constant((0.,0.),dtype=c.TFdtype)
             }
     return pars
 

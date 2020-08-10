@@ -817,8 +817,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
-        # This is a little confusing, but basically need to make the batch_shape+sample_shape for the sample
-        # match the JointDistribution. Will assume axis 0 is always the "number of samples", so extra dims
+        # This is a little confusing, but basically need to make the sample_shape+batch_shape for the sample
+        # match the batch_shape of the JointDistribution. Will assume axis 0 is always the "number of samples", so extra dims
         # are to be inserted into the batch dims of the sample at axis 1.
         consistent, batch_shape = c.deep_equals(joint.batch_shape_tensor())
         if not consistent:
@@ -839,4 +839,31 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("matched_samples:", matched_samples)
         print("q:", q)
         return c.squeeze_to(q,2,dont_squeeze=[0])
+
+    def bcast_batch_shape_tensor(self):
+        """The built-in batch_shape_tensor method for NamedJointDistribution in
+           tensorflow_probability returns a dictionary of batch shapes, one for
+           each component of the JointDistribution.
+           Here, we instead return a *single* batch_shape_tensor, representing
+           a common consistent batch_shape for the whole JointDistribution. It
+           will be an error if no consistent such shape exists after broadcasting
+           rules are applied.
+        """
+        
+        all_batch_shapes = self.batch_shape_tensor()
+
+        # First pass: find the batch shape with the most dimensions. All shapes
+        # will be broadcast to this number of dims.
+        ndims = 0
+        for d,shape in all_batch_shapes.items():
+            if shape.shape[0] > ndims: ndims = shape.shape[0]
+        
+        # Second pass: attempt to broadcast everything to ndims
+        out_shape = tuple(1 for i in range(ndims))
+        for d,shape in all_batch_shapes.items():
+            out_shape = c.get_bcast_shape(shape,out_shape)
+
+        # TODO: better error message
+
+        return out_shape
 

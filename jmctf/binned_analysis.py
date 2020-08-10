@@ -110,8 +110,6 @@ class BinnedAnalysis(BaseAnalysis):
 
         # Prepare input parameters
         #print("input pars:",pars)
-        b = tf.expand_dims(tf.constant(self.SR_b,dtype=c.TFdtype),0) # Expand to match shape of signal list
-        bsys = tf.expand_dims(tf.constant(bsys_tmp,dtype=c.TFdtype),0)
         s = pars['s'] * self.s_scaling # We "scan" normalised versions of s, to help optimizer
         theta = pars['theta'] * self.theta_scaling # We "scan" normalised versions of theta, to help optimizer
         #print("de-scaled pars: s    :",s)
@@ -121,10 +119,23 @@ class BinnedAnalysis(BaseAnalysis):
         #print("theta_safe:", theta_safe)
         #print("rate:", s+b+theta_safe)
  
+        # Expand dims of internal parameters to match input pars. Right-most dimension is the 'event' dimension, 
+        # i.e. parameters for each independent Poisson distribution. The rest go into batch_shape.
+        if s.shape==():
+            n_batch_dims = 0
+        else:
+            n_batch_dims = len(s.shape) - 1
+        new_dims = [1 for i in range(n_batch_dims)]
+        b = tf.constant(self.SR_b,dtype=c.TFdtype)
+        bsys = tf.constant(bsys_tmp,dtype=c.TFdtype)
+        if n_batch_dims>0:
+            b = tf.reshape(b,new_dims+list(b.shape))
+            bsys = tf.reshape(bsys,new_dims+list(bsys.shape))
+ 
         # Poisson model
         poises0  = tfd.Poisson(rate = tf.abs(s+b+theta_safe)+c.reallysmall) # Abs works to constrain rate to be positive. Might be confusing to interpret BF parameters though.
         # Treat SR batch dims as event dims
-        poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=1)
+        poises0i = tfd.Independent(distribution=poises0, reinterpreted_batch_ndims=-1)
         tfds["n"] = poises0i
 
         # Multivariate background constraints
@@ -141,13 +152,13 @@ class BinnedAnalysis(BaseAnalysis):
             if np.sum(~self.in_cov)>0:
                 nuis0 = tfd.Normal(loc = theta_safe[...,~self.in_cov], scale = bsys[...,~self.in_cov])
                 # Treat SR batch dims as event dims
-                nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
+                nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=-1)
                 tfds["x_nocov"] = nuis0i
         else:
             # Only have uncorrelated background constraints
             nuis0 = tfd.Normal(loc = theta_safe, scale = bsys)
             # Treat SR batch dims as event dims
-            nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=1)
+            nuis0i = tfd.Independent(distribution=nuis0, reinterpreted_batch_ndims=-1)
             tfds["x"] = nuis0i 
         #print("hello3")
 
