@@ -379,13 +379,13 @@ class LEECorrectorMaster(LEECorrectorBase):
         sql.create_table(cur,self.profiled_table+"_observed",comb_cols[:-1]) # Don't want the logw column for this
         self.close_db(conn)
  
-    def get_parameter_structure(self):
+    def parameter_shapes(self):
         """Introspect the parameters for the joint distribution of all analyses.
            For helping understand what null hypotheses parameters are required as
            input.
         """
         # JointDistribution already has a method for doing this
-        return JointDistribution(self.analyses).get_parameter_structure()
+        return JointDistribution(self.analyses).parameter_shapes()
 
     def add_events(self,N,bias=0):
         """Generate pseudodata for all analyses under the null hypothesis"""
@@ -823,7 +823,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         # Columns for pseudodata table
         self.event_columns = ["EventID"] # ID number for event, used as index for table  
-        for name,dim in self.analysis.get_sample_structure().items():
+        for name,dim in self.analysis.event_shapes().items():
            self.event_columns += ["{0}_{1}".format(name,i) for i in range(dim)]
 
         #print("columns:", self.event_columns)
@@ -869,7 +869,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         conn = self.connect_to_db()
         cur = conn.cursor()
    
-        structure = self.analysis.get_sample_structure() 
+        structure = self.analysis.event_shapes()
         
         command = "INSERT INTO 'events' ('logw'"
         for name, size in structure.items():
@@ -897,7 +897,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
     def load_N_events(self,N,reftable,condition=None,offset=0):
         """Loads N events from database where 'condition' is true in 'reftable'
            To skip rows, set 'offset' to the first row to be considered."""
-        structure = self.analysis.get_sample_structure() 
+        structure = self.analysis.event_shapes()
         conn = self.connect_to_db()
         cur = conn.cursor()
 
@@ -968,7 +968,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if isinstance(EventIDs, str) and EventIDs=='observed':
             events = self.analysis.get_observed_samples()
         else:
-            structure = self.analysis.get_sample_structure() 
+            structure = self.analysis.event_shapes()
             cols = []
             for name, size in structure.items():
                 for j in range(size):
@@ -1001,11 +1001,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             observed_mode = False
 
-        nuis_structure = self.analysis.get_nuisance_parameter_structure()
+        nuis_structure = self.analysis.nuisance_parameter_shapes()
         cols = []
-        for par,size in nuis_structure.items():
-            for i in range(size):
-                cols += ["{0}_{1}".format(par,i)]
+        for par,shape in nuis_structure.items():
+            indices = ""
+            for i in shape:
+                indices += "_{0}".format(i)
+            cols += ["{0}{1}".format(par,indices)]
 
         if len(cols)>0:
             conn = self.connect_to_db()

@@ -5,6 +5,7 @@ import sqlite3
 import numpy as np
 import tensorflow as tf
 import scipy.interpolate as spi
+from functools import reduce
 from collections.abc import Mapping
 
 # Reference dtype for consistency in TensorFlow operations
@@ -330,8 +331,8 @@ def deep_shape(d,axis=0,numpy_bcast=True):
 def get_bcast_shape(shape1,shape2,numpy_bcast=True):
     """Of two tensor/array shapes, return the shape to which they can be broadcast under numpy rules
        (or throw an error if bcast is not possible"""
-    print("shape1:", shape1, len(shape1))
-    print("shape2:", shape2, len(shape2))
+    #print("shape1:", shape1, len(shape1))
+    #print("shape2:", shape2, len(shape2))
     if len(shape1)!=len(shape2):
         if numpy_bcast:
             # Apply numpy broadcasting rules to match dimensions and add "implicit" dimensions
@@ -349,8 +350,8 @@ def get_bcast_shape(shape1,shape2,numpy_bcast=True):
             # Without full numpy broadcasting, shape is indeterminate 
             msg = "Shapes are not compatible! They have different numbers of dimensions (found {0} vs {1})".format(shape1,shape2)
             raise ValueError(msg)
-    print("expanded shape1:", shape1, len(shape1))
-    print("expanded shape2:", shape2, len(shape2))
+    #print("expanded shape1:", shape1, len(shape1))
+    #print("expanded shape2:", shape2, len(shape2))
     # Number of dimensions should now match. Now compare their sizes.
     newshape = [-1 for s in shape1]
     for i,(si,sv) in enumerate(zip(shape1,shape2)):
@@ -366,7 +367,7 @@ def get_bcast_shape(shape1,shape2,numpy_bcast=True):
     if -1 in newshape:
         msg = "Failed to broadcast shapes! -1 detected! (shape1 = {0}, shape2={1}, newshape = {2})".format(shape1,shape2,newshape)
         raise ValueError(msg)
-    print("newshape: {0}".format(newshape))
+    #print("newshape: {0}".format(newshape))
     return tuple(newshape)
 
 def squeeze_axis_0(pars):
@@ -466,7 +467,7 @@ def sample_batch_shape(sample,event_shapes):
         if len(eshape)>0 and x.shape[-len(eshape):] != eshape:
             msg = "Supplied event shape for distribution {0} ({1}) does not match trailing dimensions of sample! ({2})!".format(name,eshape,x.shape)
             raise ValueError(msg)
-        bshape = x.shape[:-len(eshape)]
+        bshape = x.shape[:-len(eshape) or None]
         if batch_shape is None:
             batch_shape = bshape
         elif batch_shape!=bshape:
@@ -487,78 +488,98 @@ def loose_squeeze(tensor,axis):
         out = tensor
     return out
 
-def cat_pars_2d(pars,remove_axis0=False):
-    """Stack separate tensorflow parameters from a dictionary into
-       a single tensor, in order fixed by the dict default iteration order.
-       Ensures that output is at least 2D, i.e. scalar input has two dimensions
-       added, and 1D input has one dimension added (as axis 0).
-       If remove_axis0 is True, then AFTER expanding everything to 2D, axis 0
-       is squeezed. It will be an error to use this option for input for which
-       the (expanded) axis 0 is not a singleton.
+def cat_pars_to_tensor(pars,par_shapes):
+    """Combine a dictionary of parameters into a single tensor,
+       broadcasting all batch_shape dimensions against each
+       other and then flattening them to 1D, and flattening
+       all "parameter_shape" dimensions before concatenating
+       everything to a single 2D tensor.
+       Operation reversed (broadcast is not undone) by
+       decat_tensor_to_pars
 
-       TODO: Allow 2D parameters? Could automatically flatten/unflatten them to 1D.
+       Error thrown if broadcast is not possible.
+
+       par_shapes should be a dictionary matching the structure
+       of "pars", where the bottom level objects are lists/tuples/tensors
+       that describe the primitive (i.e. non batch shape) dimensions
+       of each parameters (as returned by the parameter_shapes()
+       method for each analysis)
     """
-    parlist = []
-    maxdims = {}
-    for ka,a in atleast_2d(pars).items():
-        for kp,p in a.items():
-            if remove_axis0:
-                if p.shape[0]!=1:
-                    msg = "Tried to squeeze axis 0 due to 'remove_axis0=True' flag, but this axis was not a singleton for parameter {0} of analysis {1}. This parameter had original shape {2} and expanded shape {3}".format(kp,ka,p.shape,p.shape)
-                    raise ValueError(msg)
-                else:
-                    p = tf.squeeze(p,axis=0)
-            parlist += [p]
-            i = -1
-            for d in p.shape[::-1]:
-                if i not in maxdims.keys() or maxdims[i]<d: maxdims[i] = d
-                i-=1
-    maxshape = [None for i in range(len(maxdims))]
-    for i,d in maxdims.items():
-        maxshape[i] = d
 
-    # Attempt to broadcast all inputs to same shape
+    # Will attempt to broadcast all inputs to same batch shape, so need
+    # to first find this shape.
+    max_batch_shape = ()
+
+    for ka,a in pars.items():
+        for kp,p in a.items():
+            # Compare par_shapes to trailing dims and check for consistency
+            if ka not in par_shapes.keys():
+                msg = "Failed to form tensor from input parameters! 'par_shapes' dictionary did not contain any shapes for analysis {0} found in 'pars'. par_shapes was: {1}".format(ka,par_shapes)
+                raise ValueError(msg)
+            elif kp not in par_shapes[ka].keys():
+                msg = "Failed to form tensor from input parameters! 'par_shapes' dictionary did not contain the basic shape of parameter {0} in analysis {1}! par_shapes was: {2}".format(kp,ka,par_shapes)
+                raise ValueError(msg)
+                
+            n = len(par_shapes[ka][kp])
+
+            if p.shape[-n:] != par_shapes[ka][kp]:
+                msg = "Failed to form tensor from input parameters! The trailing dimensions of parameter {0} (with shape={1}) do not match the shape specified for this parameter in the par_shapes dictionary (which was {2})".format(kp,p.shape,par_shapes[ka][kp])
+
+            batch_shape = p.shape[:-n or None] # The 'or None' deals with the n=0 case nicely. 
+            max_batch_shape = get_bcast_shape(batch_shape,max_batch_shape)
+            #print("p:{0}, p.shape:{1}, par_shape:{2}, n:{3}, par_batch:{4}, bcast_batch: {5}".format(kp,p.shape,par_shapes[ka][kp],n,batch_shape,max_batch_shape))
+
+    # Consistent batch shape discovered. Create list of broadcasted parameters, with flattened batch_shape and par_shape
     matched_parlist = []
-    bcast = tf.broadcast_to(tf.constant(np.ones([1 for d in range(len(maxdims))]),dtype=TFdtype),maxshape)
-    for p in parlist:
-        matched_parlist += [p*bcast]
-    #return tf.Variable(tf.concat(matched_parlist,axis=-1),name="all_parameters")               
-    return tf.concat(matched_parlist,axis=-1) 
-
-def uncat_pars_2d(catted_pars,pars_template,axis0_removed=False):
-    """De-stack tensorflow parameters back into separate variables of
-       shapes know to each analysis. Assumes stacked_pars are of the
-       same structure as pars_template. This version reverses
-       cat_pars_2d, i.e. it removes singleton dimensions as found to
-       match scalar and 1D entries in pars_template.
-       If axis0_removed is True, it is assumed that the catted_pars
-       have had their 0th axis squeezed, and this is restored during
-       the de-catting"""
-    pars = {}
-    i = 0
-    if axis0_removed:
-        # Restore singleton axis 0 if it was removed
-        catted_pars_2d = tf.expand_dims(catted_pars,axis=0)              
-    else:
-        catted_pars_2d = catted_pars
-
-    for ka,a in pars_template.items():
-        pars[ka] = {}
+    
+    for ka,a in pars.items():
         for kp,p in a.items():
-            # We always stack to at least 2D, so need to undo this for some cases
-            if p.shape==():
-                N = 1 # Even scalars still take up one slot
-                piN = tf.squeeze(catted_pars_2d[...,i:i+N],axis=[0,1])
-            elif len(p.shape)==1:
-                N = 1 # Assume there is an implicit singleton inner dimension
-                piN = catted_pars_2d[...,i:i+N]        
-            else:
-                # No change to shape required
-                N = p.shape[-1]
-                piN = catted_pars_2d[...,i:i+N]
-            pars[ka][kp] = piN
-            i+=N
-    return pars
+            bcast_shape = [d for d in max_batch_shape] + [d for d in par_shapes[ka][kp]]
+            #print("Attempting to broadcast par {0} (value={1}) with shape {2} to shape {3}".format(kp,p,p.shape,bcast_shape))
+            bcast_par = tf.broadcast_to(p,bcast_shape)
+
+            # Reshape to 2D. I think this should just work...
+            new_shape = [prod(max_batch_shape),prod(par_shapes[ka][kp])]
+            #print("bcast_par:", bcast_par)
+            #print("max_batch_shape:", max_batch_shape)
+            #print("new_shape:", new_shape)
+            #print("Attempting to reshape bcast_par {0} with shape {1} to shape {2}".format(kp,bcast_par.shape,new_shape)) 
+            pars_2D = tf.reshape(bcast_par,new_shape)
+            matched_parlist += [pars_2D]
+    
+    # Do the final concatenation along the "parameter" axis
+    return tf.concat(matched_parlist,axis=1), max_batch_shape
+
+def decat_tensor_to_pars(tensor,par_template,par_shapes,batch_shape):
+    """Undo cat_pars_to_tensor, assuming tensor was constructed using
+       the order inferred from par_template dictionary 
+       (doesn't undo broadcasting)"""
+    #print("tensor:", tensor)
+    out_pars = {}
+    i = 0
+    for ka,a in par_template.items():
+        out_pars[ka] = {}
+        for kp,p in a.items():
+            if ka not in par_shapes.keys():
+                msg = "Failed to extract parameters from input tensor! 'par_shapes' dictionary did not contain any shapes for analysis {0} found in 'par_template'. par_shapes was: {1}".format(ka,par_shapes)
+                raise ValueError(msg)
+            elif kp not in par_shapes[ka].keys():
+                msg = "Failed to extract parameters from input tensor! 'par_shapes' dictionary did not contain the basic shape of parameter {0} in analysis {1}! par_shapes was: {2}".format(kp,ka,par_shapes)
+                raise ValueError(msg)            
+            n = prod(par_shapes[ka][kp])
+            par_slice = tensor[:,i:i+n]
+            #print("par_slice:", par_slice)
+            new_shape = [d for d in batch_shape] + [d for d in par_shapes[ka][kp]]
+            #print("batch_shape:", batch_shape)
+            #print("par_shapes:", par_shapes[ka][kp])
+            #print("new_shape:", new_shape)
+            out_pars[ka][kp] = tf.reshape(par_slice,new_shape)
+            i+=n
+    return out_pars
+   
+def prod(iterable,initializer=1):
+    """Take product of all elements"""
+    return reduce(lambda x, y: x*y, iterable, initializer)
 
 def iterate_samples(sample_dict):
     """Iterate through samples in a dictionary of samples"""

@@ -454,19 +454,12 @@ class JointDistribution(tfd.JointDistributionNamed):
             raise ValueError(msg)
         return pars, fixed_pars
 
-    def get_sample_structure(self):
-        """Returns a dictionary whose structure is the same as samples from the joint PDF"""
-        out = {}
-        for a in self.analyses.values():
-            out.update(c.add_prefix(a.name,a.get_sample_structure()))
-        return out
-
-    def get_parameter_structure(self):
+    def decomposed_parameter_shapes(self):
         """Returns three dictionaries whose structure explains how parameters should be supplied
            to this object"""
-        interest  = {a.name: a.get_interest_parameter_structure() for a in self.analyses.values()}
-        fixed = {a.name: a.get_fixed_parameter_structure() for a in self.analyses.values()}
-        nuis  = {a.name: a.get_nuisance_parameter_structure() for a in self.analyses.values()} 
+        interest  = {a.name: a.interest_parameter_shapes() for a in self.analyses.values()}
+        fixed = {a.name: a.fixed_parameter_shapes() for a in self.analyses.values()}
+        nuis  = {a.name: a.nuisance_parameter_shapes() for a in self.analyses.values()} 
         return interest, fixed, nuis
 
     def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False):
@@ -545,36 +538,25 @@ class JointDistribution(tfd.JointDistributionNamed):
         """Obtain Hessian matrix (and grad) at input parameter points
            Make sure to use de-scaled parameters as input!
 
-           Shape requirements: pars must either be a *single* hypothesis,
-           or else a number of hypotheses equal to the number of samples
-           (e.g. for when we want one Hessian per sample, expanded around
-           some parameter point tailored to each sample).
+           Shape requirements: 
+            samples should match self.pars, in the sense that the 
+            sample_dims+batch_dims for the samples should match the
+            batch_dims that results from self.pars, after broadcasting.
+            That is, the samples should be matched one-to-one to (broadcast) 
+            parameters.
 
-           NOTE: Actually for now we only allow the second option.
+            (e.g. we want one Hessian per sample, expanded around
+            some parameter point tailored to each sample).
 
            Parameters should be those already known internally to this
            JointDistribution.
         """
 
         # Check batch shapes associated with internal probability models
-        # This will affect the output Hessian shape, and we need to correct for it.
+        # This will affect the output Hessian shape, i.e. we 
         # Returns a dict of batch shapes.
-        batch_shapes = self.batch_shape_tensor()
- 
-        # The batch shapes should all be consistent!
-        consistent, batch_shape = c.deep_equals(batch_shapes)
- 
-        print("Hessian: batch_shapes:", batch_shapes)
+        batch_shape = self.bcast_batch_shape_tensor()
         print("Hessian: batch_shape:", batch_shape)
-
-        # Throw error if batch shape cannot be compressed to 1D
-        dims_to_squeeze = tf.where(tf.equal(batch_shape,1))[:,0]
-        print("dims_to_squeeze:", dims_to_squeeze) 
-
-        print(dims_to_squeeze.shape[0] - batch_shape.shape[0])
-        if batch_shape.shape[0]!=1 and (batch_shape.shape[0] - dims_to_squeeze.shape[0]) != 1:
-            msg = "Disallowed batch shape observed! For Hessian calculation we ultimated require 1D batches of hypotheses and samples to be matched, so any batch shape that cannot be 'squeezed' to 1D is not permitted. Please check the shapes of the supplied parameters."
-            raise ValueError(msg)
 
         # Make sure to use non-scaled parameters to get correct gradients etc.
         pars = self.descale_pars(self.pars)
@@ -592,12 +574,14 @@ class JointDistribution(tfd.JointDistributionNamed):
                 else:
                     free_pars[a][name] = v
 
-        # Make sure shape of const parameters is correct
-        const_pars_2d = c.atleast_2d(const_pars) # Do we really need this?
+        # Stack parameters into a single tensorflow variable for
+        # matrix manipulations
+        par_shapes = self.parameter_shapes()
+        all_input_pars, bcast_batch_shape = c.cat_pars_to_tensor(free_pars,par_shapes)
 
-        # Stack current parameter values to single tensorflow variable for
-        # easier matrix manipulation
-        all_input_pars = c.cat_pars_2d(free_pars) # Our input variables to be traced. 
+        if bcast_batch_shape != batch_shape:
+            msg = "Broadcasted batch shape inferred while stacking parameters into tensor did not match batch shape inferred from underlying distribution objects! This is a bug, if there is a problem with the input parameters it should have been detected before this."
+            raise ValueError(msg)
 
         input_pars = tf.Variable(all_input_pars)
         with tf.GradientTape() as tape_outer:
@@ -612,11 +596,11 @@ class JointDistribution(tfd.JointDistributionNamed):
                 #print("free_pars:", free_pars)
                 #print("input_pars:", input_pars)
                 #print("catted_pars:", catted_pars)
-                inpars = c.uncat_pars_2d(input_pars,free_pars) # need to unstack for use in each analysis
+                inpars = c.decat_tensor_to_pars(input_pars,free_pars,par_shapes,batch_shape) # need to unstack for use in each analysis
          
                 # print("inpars:", inpars)
                 # merge with const parameters
-                all_inpars = c.deep_merge(inpars,const_pars_2d)
+                all_inpars = c.deep_merge(inpars,const_pars)
                 scaled_inpars = self.scale_pars(all_inpars)
                 q = 0
                 for a in self.analyses.values():
@@ -642,19 +626,21 @@ class JointDistribution(tfd.JointDistributionNamed):
         #hessian = tape_outer.jacobian(grads, input_pars)
         print("H:",hessians)
 
-        # If Hessian (or grad) dimension is too large (due to extra singleton dimensions in either the samples or the
-        # input parameters) then squeeze them out until we get to the right shape.
-        hessians_out = c.squeeze_to(hessians,d=3,dont_squeeze=[0])
-        grads_out = c.squeeze_to(grads,d=2,dont_squeeze=[0])
-        print("g_out:",grads_out)
-        print("H_out:",hessians_out)
+        # # If Hessian (or grad) dimension is too large (due to extra singleton dimensions in either the samples or the
+        # # input parameters) then squeeze them out until we get to the right shape.
+        # hessians_out = c.squeeze_to(hessians,d=3,dont_squeeze=[0])
+        # grads_out = c.squeeze_to(grads,d=2,dont_squeeze=[0])
+        # print("g_out:",grads_out)
+        # print("H_out:",hessians_out)
+        hessians_out = hessians
+        grads_out = grads
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):
         """Separate input parameters into 'interest' and 'nuisance' lists,
            keeping tracking of their original 'indices' w.r.t. catted format.
            Mainly used for decomposing Hessian matrix."""
-        interest, fixed, nuisance = self.get_parameter_structure()
+        interest, fixed, nuisance = self.decomposed_parameter_shapes()
         interest_i = {} # indices of parameters in Hessian/stacked pars
         nuisance_i = {}
         interest_p = {} # parameters themselves
@@ -776,44 +762,56 @@ class JointDistribution(tfd.JointDistributionNamed):
     def neg2loglike_quad(self,signal,A,B,interest,nuisance,samples):
         """Compute -2*loglikelihood using pre-computed Taylor expansion
            parameters (for many samples) for a set of signal hypotheses"""
-        # Stack signal parameters into appropriate vector for matrix operations
-        parlist = []
+
+        # Make sure format of signal parameters matches the known "interest" parameters
+        # for all analyses (also culls out any unnecessary parameters)
+        parlist = {}
         for ka,a in interest.items():
             if ka not in signal.keys():
-                raise ValueError("No test signals provided for analysis {0}".format(ka)) 
+                raise ValueError("No test signals provided for analysis {0}".format(ka))
+            parlist[ka] = {}
             for kp in a.keys():
                 if kp not in signal[ka].keys():
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
                 #print("signal...", signal[ka][kp])
-                parlist += [signal[ka][kp]]
+                parlist[ka][kp] = signal[ka][kp]
 
         if A is None or B is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
             # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
             # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
             # is missing when there are no nuisance parameters, so we need to add it.
-            pars2d, did_2d_expand = c.atleast_2d(signal,report=True)
-            expanded_pars = c.deep_expand_dims(pars2d,axis=0)
+            expanded_pars = c.deep_expand_dims(signal,axis=0)
             print("signal:", signal)
-            print("pars2d:", pars2d)
             print("expanded_pars:", expanded_pars)
             # Compute -2*log_prob
             joint = JointDistribution(self.analyses.values(),expanded_pars)
         else:
-            s = tf.cast(tf.concat(parlist,axis=-1),dtype=c.TFdtype)
-            s_0 = c.cat_pars_2d(interest) # stacked interest parameter values at expansion point
-            theta_0 = c.cat_pars_2d(nuisance) # stacked nuisance parameter values at expansion point
+            par_shapes = self.parameter_shapes()
+            s, s_bshape = c.cat_pars_to_tensor(parlist,par_shapes) 
+            s_0, s0_bshape = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
+            theta_0, t0_bshape = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
 
-            # Squeeze theta_0 to 2D if it is too big (due to input parameter batch shape)
-            theta_0 = c.squeeze_to(theta_0,d=2) 
+            print("s_bshape:", s_bshape)
+            print("s0_bshape:", s0_bshape)
+            print("t0_bshape:", t0_bshape)
+ 
+            print("s.shape:", s.shape)
+            print("s_0.shape:", s_0.shape)
+            print("theta_0.shape:", theta_0.shape)
+            print("A.shape:", A.shape)
+            print("B.shape:", B.shape)
    
             # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
             theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
             #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
             #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
 
+            print("theta_prof.shape:", theta_prof.shape)
+
             # de-stack analytically profiled nuisance parameters
-            theta_prof_dict = c.uncat_pars_2d(theta_prof,pars_template=nuisance)
+            theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,t0_bshape) 
+            
             # Compute -2*log_prob
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
@@ -874,4 +872,18 @@ class JointDistribution(tfd.JointDistributionNamed):
                  raise ValueError(msg + ": -1 was detected in shape!")
 
         return out_shape
+
+    def parameter_shapes(self):
+        """Returns a dictionary describing the shapes of all input parameters for each analysis 
+           required to produce a single event of the basic event shape for all component distributions. 
+           
+           Note: There is a similar function built-in, "param_shape", but it doesn't really make 
+           sense for JointDistribution since it only accepts one input 'event_shape', whilst this 
+           can obviously be different across the various component distributions. This function
+           also works for analysis parameters rather than distribution parameters."""
+        param_shapes = {name: a.parameter_shapes() for name,a in self.analyses.items()}
+        return param_shapes
+
+
+
 

@@ -108,21 +108,24 @@ class NormalAnalysis(BaseAnalysis):
         Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=c.TFdtype),0),0)
         return Osamples
 
-    def get_interest_parameter_structure(self):
+    def interest_parameter_shapes(self):
         """Get a dictionary describing the structure of the "interesting" parameters in this analysis
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
-        return {"mu": 1}
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
+        return {"mu": ()}
 
-    def get_fixed_parameter_structure(self):
+    def fixed_parameter_shapes(self):
         """Get a dictionary describing the structure of the fixed parameters in this analysis
            (i.e. parameters that can be altered along with the signal hypothesis in nuisance
            parameter fits, but which are kept fixed during all fitting.
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
         return {} # None for this analysis
 
-    def get_nuisance_parameter_structure(self):
+    def nuisance_parameter_shapes(self):
         """Get a dictionary describing the nuisance parameter structure of this analysis.
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
         return {} # None for this analysis
 
     def get_nuisance_parameters(self,sample_dict,fixed_pars):

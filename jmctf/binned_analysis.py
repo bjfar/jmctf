@@ -239,22 +239,25 @@ class BinnedAnalysis(BaseAnalysis):
             Osamples["x"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=c.TFdtype),0),0)
         return Osamples
 
-    def get_interest_parameter_structure(self):
+    def interest_parameter_shapes(self):
         """Get a dictionary describing the structure of the "interesting" parameters in this analysis
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
-        return {"s": len(self.SR_n)}
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
+        return {"s": (len(self.SR_n),)}
 
-    def get_fixed_parameter_structure(self):
+    def fixed_parameter_shapes(self):
         """Get a dictionary describing the structure of the fixed parameters in this analysis
            (i.e. parameters that can be altered along with the signal hypothesis in nuisance
            parameter fits, but which are kept fixed during all fitting.
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
         return {}
 
-    def get_nuisance_parameter_structure(self):
+    def nuisance_parameter_shapes(self):
         """Get a dictionary describing the nuisance parameter structure of this analysis.
-           Basically just the keys of the parameter dictionaries plus dimension of each entry"""
-        return {"theta": len(self.SR_b)} # Just one nuisance parameter per signal region, packaged into one tensor. 
+           Basically just the keys of the parameter dictionaries plus primitive (non-batch dimensions) 
+           shape of each entry"""
+        return {"theta": (len(self.SR_b),)} # Just one nuisance parameter per signal region, packaged into one 1D tensor. 
 
     def get_nuisance_parameters(self,sample_dict,fixed_pars):
         """Get nuisance parameters to be optimized, for input to "tensorflow_model"""

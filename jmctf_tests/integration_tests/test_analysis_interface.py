@@ -107,7 +107,7 @@ def test_JointDistribution_init_pars(joint):
 def test_JointDistribution_output_shapes_single(joint,samples,log_prob_shape):
     """Test that flow of shapes through JointDistribution samples -> pdf is correct"""
     x = samples
-    p = joint.log_prob(x)
+    log_prob = joint.log_prob(x)
     # Should obey tensorflow_probability shape rules here.
     # See shapes_readme.md
 
@@ -115,7 +115,7 @@ def test_JointDistribution_output_shapes_single(joint,samples,log_prob_shape):
     print("x:", x)
     print("p:", p)
     print("log_prob_shape:", log_prob_shape)
-    assert p.shape == log_prob_shape
+    assert log_prob.shape == log_prob_shape
 
 def test_fit_all(joint,samples,log_prob_shape):
     """Test fitting of all free parameters"""
