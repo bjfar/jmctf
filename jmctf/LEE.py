@@ -1001,14 +1001,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             observed_mode = False
 
-        nuis_structure = self.analysis.nuisance_parameter_shapes()
-        cols = []
-        for par,shape in nuis_structure.items():
-            indices = ""
-            for i in shape:
-                indices += "_{0}".format(i)
-            cols += ["{0}{1}".format(par,indices)]
-
+        nuis_shapes = self.analysis.nuisance_parameter_shapes()
+        par_tensor_2D, batch_shape, cols = c.cat_pars_to_tensor(fitted_pars,nuis_shapes)
+ 
         if len(cols)>0:
             conn = self.connect_to_db()
             cur = conn.cursor()
@@ -1360,10 +1355,12 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 arrays = [fix_dims(qb)]
                 cols = ["neg2logL"]
                 fitted_pars_b = nuis_pars_b["fitted"]
-                for par, arr in fitted_pars_b[self.analysis.name].items():
-                    for i in range(arr.shape[-1]):
-                        cols += ["{0}_{1}".format(par,i)]
-                    arrays += [fix_dims(arr)] # remove 'alternate hypothesis' dimension, if needed
+
+                # Flatten parameters to single 2D tensor
+                par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars_b,joint.parameter_shapes())
+                arrays += [par_tensor_2D]
+                cols += flat_par_names
+
                 allpars = tf.concat(arrays,axis=-1)               
                 data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
                 data.index.name = 'EventID' 
@@ -1383,10 +1380,12 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             arrays = [fix_dims(qbO)]
             cols = ['neg2logL']
             fitted_pars = pars["fitted"]
-            for par, arr in fitted_pars[self.analysis.name].items():
-                for i in range(arr.shape[-1]):
-                    cols += ["{0}_{1}".format(par,i)]
-                arrays += [fix_dims(arr)] # remove 'alternate hypothesis' dimension, if needed 
+
+            # Flatten parameters to single 2D tensor
+            par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars,joint.parameter_shapes())
+            arrays += [par_tensor_2D]
+            cols += flat_par_names
+
             allpars = tf.concat(arrays,axis=-1)               
             data = pd.DataFrame(allpars.numpy(),columns=cols)
             data.index.rename('EventID',inplace=True) 

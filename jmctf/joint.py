@@ -577,7 +577,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # Stack parameters into a single tensorflow variable for
         # matrix manipulations
         par_shapes = self.parameter_shapes()
-        all_input_pars, bcast_batch_shape = c.cat_pars_to_tensor(free_pars,par_shapes)
+        all_input_pars, bcast_batch_shape, column_names = c.cat_pars_to_tensor(free_pars,par_shapes)
 
         if bcast_batch_shape != batch_shape:
             msg = "Broadcasted batch shape inferred while stacking parameters into tensor did not match batch shape inferred from underlying distribution objects! This is a bug, if there is a problem with the input parameters it should have been detected before this."
@@ -788,9 +788,9 @@ class JointDistribution(tfd.JointDistributionNamed):
             joint = JointDistribution(self.analyses.values(),expanded_pars)
         else:
             par_shapes = self.parameter_shapes()
-            s, s_bshape = c.cat_pars_to_tensor(parlist,par_shapes) 
-            s_0, s0_bshape = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
-            theta_0, t0_bshape = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
+            s, s_bshape, s_names = c.cat_pars_to_tensor(parlist,par_shapes) 
+            s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
+            theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
 
             print("s_bshape:", s_bshape)
             print("s0_bshape:", s0_bshape)

@@ -531,7 +531,12 @@ def cat_pars_to_tensor(pars,par_shapes):
 
     # Consistent batch shape discovered. Create list of broadcasted parameters, with flattened batch_shape and par_shape
     matched_parlist = []
+
+    # Also need to generate some names for the columns, for when we want to record these to disk.
+    flat_par_indices = get_parameter_indices(par_shapes)
+    col_names_list = []
     
+    print("flat_par_indices:", flat_par_indices)
     for ka,a in pars.items():
         for kp,p in a.items():
             bcast_shape = [d for d in max_batch_shape] + [d for d in par_shapes[ka][kp]]
@@ -539,16 +544,26 @@ def cat_pars_to_tensor(pars,par_shapes):
             bcast_par = tf.broadcast_to(p,bcast_shape)
 
             # Reshape to 2D. I think this should just work...
-            new_shape = [prod(max_batch_shape),prod(par_shapes[ka][kp])]
+            npars = prod(par_shapes[ka][kp])
+            new_shape = [prod(max_batch_shape),npars]
+
             #print("bcast_par:", bcast_par)
             #print("max_batch_shape:", max_batch_shape)
             #print("new_shape:", new_shape)
             #print("Attempting to reshape bcast_par {0} with shape {1} to shape {2}".format(kp,bcast_par.shape,new_shape)) 
             pars_2D = tf.reshape(bcast_par,new_shape)
             matched_parlist += [pars_2D]
-    
+            col_names_list += ["{0}::{1}{2}".format(ka,kp,indices) for indices in flat_par_indices[ka][kp]]
+     
+    print("matched_parlist:", matched_parlist)
+    print("col_names_list:", col_names_list)
+
     # Do the final concatenation along the "parameter" axis
-    return tf.concat(matched_parlist,axis=1), max_batch_shape
+    if len(matched_parlist)!=0:
+        catted = tf.concat(matched_parlist,axis=1)
+    else:
+        catted = None
+    return catted, max_batch_shape, col_names_list
 
 def decat_tensor_to_pars(tensor,par_template,par_shapes,batch_shape):
     """Undo cat_pars_to_tensor, assuming tensor was constructed using
@@ -576,7 +591,18 @@ def decat_tensor_to_pars(tensor,par_template,par_shapes,batch_shape):
             out_pars[ka][kp] = tf.reshape(par_slice,new_shape)
             i+=n
     return out_pars
-   
+
+@deep()
+def get_parameter_indices(shape):
+    """Returns flattened list of stringified indices given nested dictionaries of array shapes""" 
+    npars = prod(shape)
+    index_strings = ["" for i in range(npars)]
+    all_indices = np.indices(shape)
+    for dim_indices in all_indices:
+        for i,index in enumerate(dim_indices.flatten()):
+            index_strings[i] += "_{0}".format(index)
+    return index_strings
+
 def prod(iterable,initializer=1):
     """Take product of all elements"""
     return reduce(lambda x, y: x*y, iterable, initializer)
