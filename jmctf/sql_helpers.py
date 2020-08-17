@@ -112,7 +112,7 @@ def load(cursor,table_name,cols,keys=None,primary=None):
     # Check columns
     #c.execute('PRAGMA table_info({0})'.format(table_name))
     #results = c.fetchall()
-    print("cols: ", cols)
+    #print("cols: ", cols)
 
     command = "SELECT "
     for col in cols:
@@ -125,7 +125,7 @@ def load(cursor,table_name,cols,keys=None,primary=None):
         for i,(start, stop) in enumerate(ranges):
             command += " `{0}` BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
             if i<len(ranges)-1: command += " OR "
-    print("command:", command)
+    #print("command:", command)
     cursor.execute(command)
     return cursor.fetchall() 
 

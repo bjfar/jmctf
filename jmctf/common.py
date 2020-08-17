@@ -539,7 +539,7 @@ def cat_pars_to_tensor(pars,par_shapes,flatten_batch=True):
     flat_par_indices = get_parameter_indices(par_shapes)
     col_names_list = []
     
-    print("flat_par_indices:", flat_par_indices)
+    #print("flat_par_indices:", flat_par_indices)
     for ka,a in pars.items():
         for kp,p in a.items():
             bcast_shape = [d for d in max_batch_shape] + [d for d in par_shapes[ka][kp]]
@@ -560,8 +560,8 @@ def cat_pars_to_tensor(pars,par_shapes,flatten_batch=True):
             matched_parlist += [pars_2D]
             col_names_list += ["{0}::{1}{2}".format(ka,kp,indices) for indices in flat_par_indices[ka][kp]]
      
-    print("matched_parlist:", matched_parlist)
-    print("col_names_list:", col_names_list)
+    #print("matched_parlist:", matched_parlist)
+    #print("col_names_list:", col_names_list)
 
     # Do the final concatenation along the "parameter" axis
     if len(matched_parlist)!=0:

@@ -556,7 +556,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # This will affect the output Hessian shape, i.e. we 
         # Returns a dict of batch shapes.
         batch_shape = self.bcast_batch_shape_tensor()
-        print("Hessian: batch_shape:", batch_shape)
+        #print("Hessian: batch_shape:", batch_shape)
 
         # Make sure to use non-scaled parameters to get correct gradients etc.
         pars = self.descale_pars(self.pars)
@@ -624,7 +624,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         hessians = tape_outer.batch_jacobian(grads, input_pars) 
         #...but we are only allowing one sample anyway, so can just do normal jacobian
         #hessian = tape_outer.jacobian(grads, input_pars)
-        print("H:",hessians)
+        #print("H:",hessians)
 
         # # If Hessian (or grad) dimension is too large (due to extra singleton dimensions in either the samples or the
         # # input parameters) then squeeze them out until we get to the right shape.
@@ -681,9 +681,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         for aj in parj.values():
             for j,Nj in aj.values():
                 jlist += [jx for jx in range(j,j+Nj)] 
-        print("H.shape:",H.shape)
-        print("ilist:",ilist)
-        print("jlist:",jlist)
+        #print("H.shape:",H.shape)
+        #print("ilist:",ilist)
+        #print("jlist:",jlist)
         # Use gather to extract row/column slices from Hessian
         if len(ilist)>0:
             subH_i = tf.gather(H,      ilist, axis=idim)
@@ -721,21 +721,21 @@ class JointDistribution(tfd.JointDistributionNamed):
            parameters, under this approximation."""
         #print("Computing Hessian and various matrix operations for all samples...")
         H, g = self.Hessian(samples)
-        print("H:", H)
-        print("g:", g) # Should be close to zero if fits worked correctly
+        #print("H:", H)
+        #print("g:", g) # Should be close to zero if fits worked correctly
         pars = self.descale_pars(self.pars) # This is what Hessian uses internally
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
-        print("descaled_pars:", pars)
-        print("samples:", samples)
-        print("interest_p:", interest_p)
-        print("nuisance_p:", nuisance_p)
-        print("interest_i:", interest_i)
-        print("nuisance_i:", nuisance_i)
+        #print("descaled_pars:", pars)
+        #print("samples:", samples)
+        #print("interest_p:", interest_p)
+        #print("nuisance_p:", nuisance_p)
+        #print("interest_i:", interest_i)
+        #print("nuisance_i:", nuisance_i)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
-        print("Hii:", Hii)
-        print("Hnn:", Hnn)
-        print("Hin:", Hin)
+        #print("Hii:", Hii)
+        #print("Hnn:", Hnn)
+        #print("Hin:", Hin)
         if Hnn is None: # Could be None if there aren't any nuisance parameters!
             A = None
             B = None
@@ -745,8 +745,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             A = tf.linalg.matvec(Hnn_inv,gn)
             B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         #print("...done!")
-        print("A:", A)
-        print("B:", B)
+        #print("A:", A)
+        #print("B:", B)
         return A, B, interest_p, nuisance_p
 
     def quad_loglike_f(self,samples):
@@ -756,7 +756,7 @@ class JointDistribution(tfd.JointDistributionNamed):
            determine the profiled nuisance parameter values. 
            Should be used after pars are fitted to the global best fit for best
            expansion."""
-        print("quad_loglike_f; samples:", samples)
+        #print("quad_loglike_f; samples:", samples)
         A, B, interest_p, nuisance_p = self.quad_loglike_prep(samples)
         f = mm.tools.func_partial(self.neg2loglike_quad,A=A,B=B,interest=interest_p,nuisance=nuisance_p,samples=samples)
         return f
@@ -767,25 +767,26 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Make sure format of signal parameters matches the known "interest" parameters
         # for all analyses (also culls out any unnecessary parameters)
-        parlist = {}
+        parlist_init = {}
         for ka,a in interest.items():
             if ka not in signal.keys():
                 raise ValueError("No test signals provided for analysis {0}".format(ka))
-            parlist[ka] = {}
+            parlist_init[ka] = {}
             for kp in a.keys():
                 if kp not in signal[ka].keys():
                     raise ValueError("No test signals provided for parameter {0} in analysis {1}".format(kp,ka))
                 #print("signal...", signal[ka][kp])
-                parlist[ka][kp] = signal[ka][kp]
+                parlist_init[ka][kp] = signal[ka][kp]
+
+        # Make sure parameters are tensorflow variables:
+        parlist = c.convert_to_TF_variables(parlist_init)
 
         if A is None or B is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
             # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
             # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
             # is missing when there are no nuisance parameters, so we need to add it.
-            expanded_pars = c.deep_expand_dims(signal,axis=0)
-            print("signal:", signal)
-            print("expanded_pars:", expanded_pars)
+            expanded_pars = c.deep_expand_dims(c.convert_to_TF_variables(signal),axis=0)
             # Compute -2*log_prob
             joint = JointDistribution(self.analyses.values(),expanded_pars)
         else:
@@ -794,34 +795,34 @@ class JointDistribution(tfd.JointDistributionNamed):
             s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
             theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
 
-            print("s_bshape:", s_bshape)
-            print("s0_bshape:", s0_bshape)
-            print("t0_bshape:", t0_bshape)
+            #print("s_bshape:", s_bshape)
+            #print("s0_bshape:", s0_bshape)
+            #print("t0_bshape:", t0_bshape)
  
-            print("s.shape:", s.shape)
-            print("s_0.shape:", s_0.shape)
-            print("theta_0.shape:", theta_0.shape)
-            print("A.shape:", A.shape)
-            print("B.shape:", B.shape)
+            #print("s.shape:", s.shape)
+            #print("s_0.shape:", s_0.shape)
+            #print("theta_0.shape:", theta_0.shape)
+            #print("A.shape:", A.shape)
+            #print("B.shape:", B.shape)
 
-            print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
-            print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
-            print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
+            #print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
+            #print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
+            #print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
     
             # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
             theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
             #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
             #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
 
-            print("theta_prof.shape:", theta_prof.shape)
+            #print("theta_prof.shape:", theta_prof.shape)
             batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
 
             # de-stack analytically profiled nuisance parameters
             theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 
             
             # Compute -2*log_prob
-            print("theta_prof_dict:", theta_prof_dict)
-            print("signal:", signal)
+            #print("theta_prof_dict:", theta_prof_dict)
+            #print("signal:", signal)
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
@@ -840,12 +841,12 @@ class JointDistribution(tfd.JointDistributionNamed):
         for i in range(n_new_dims):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
         q = -2*joint.log_prob(matched_samples)
-        print("batch_shape:", batch_shape)
-        print("s_batch_shape:", s_batch_shape)
-        print("n_new_dims:", n_new_dims)
-        print("samples:", samples)
-        print("matched_samples:", matched_samples)
-        print("q:", q)
+        #print("batch_shape:", batch_shape)
+        #print("s_batch_shape:", s_batch_shape)
+        #print("n_new_dims:", n_new_dims)
+        #print("samples:", samples)
+        #print("matched_samples:", matched_samples)
+        #print("q:", q)
         return q #c.squeeze_to(q,2,dont_squeeze=[0])
 
     def bcast_batch_shape_tensor(self):
@@ -859,18 +860,18 @@ class JointDistribution(tfd.JointDistributionNamed):
         """
         
         all_batch_shapes = self.batch_shape_tensor()
-        print("all_batch_shapes:", all_batch_shapes)
+        #print("all_batch_shapes:", all_batch_shapes)
 
         # First pass: find the batch shape with the most dimensions. All shapes
         # will be broadcast to this number of dims.
         ndims = 0
         for d,shape in all_batch_shapes.items():
-            print("d: {0}, shape: {1}, shape.shape[0]: {2}".format(d,shape,shape.shape[0]))
+            #print("d: {0}, shape: {1}, shape.shape[0]: {2}".format(d,shape,shape.shape[0]))
             if shape.shape[0] > ndims: ndims = shape.shape[0]
         
         # Second pass: attempt to broadcast everything to ndims
         out_shape = tuple(1 for i in range(ndims))
-        print("out_shape:", out_shape)
+        #print("out_shape:", out_shape)
         for d,shape in all_batch_shapes.items():
              msg = "Could not obtain consistent batch_shape across all components of the JointDistribution! Please check that all your distribution parameters will result in distribution components whose batch_shape dimensions can be broadcast against each other. Failure occurred when broadcasting distribution named '{0}' with shape {1}, to shape {2}".format(d,shape,out_shape)
              try:

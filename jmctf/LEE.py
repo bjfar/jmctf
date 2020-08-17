@@ -361,6 +361,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         self.profiled_table = 'profiled' # For combined results profiled over all alternate hypotheses
         self.nullname = nullname # For combined results for null hypothesis
         self.local_table = 'local_' # Base name for tables related to specific alternate hypotheses whose local properties we want to investigate
+        self.null_table = self.local_table+self.nullname # Name of table contained null hypothesis fit results (and related)
         self.analyses = analyses # For introspection only. Otherwise LEECorrectorAnalysis interface is used
         for a in self.analyses:
             self.LEEanalyses[a.name] = LEECorrectorAnalysis(a,path,master_name,{a.name: null_hyp[a.name]},nullname)
@@ -386,6 +387,15 @@ class LEECorrectorMaster(LEECorrectorBase):
         """
         # JointDistribution already has a method for doing this
         return JointDistribution(self.analyses).parameter_shapes()
+
+    def decomposed_parameter_shapes(self):
+        """Introspect the parameters for the joint distribution of all analyses,
+           decomposed into nuisance, interest, and fixed parameters.
+           For helping understand what null hypotheses parameters are required as
+           input.
+        """
+        # JointDistribution already has a method for doing this
+        return JointDistribution(self.analyses).decomposed_parameter_shapes()
 
     def add_events(self,N,bias=0):
         """Generate pseudodata for all analyses under the null hypothesis"""
@@ -491,7 +501,7 @@ class LEECorrectorMaster(LEECorrectorBase):
             if pars is None:
                 raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all background fits been done?")
             events = c.add_prefix(name,a.load_events(EventIDs))
-            print("loaded events:", events)
+            #print("loaded events:", events)
             quads += [a.compute_quad(pars,events)]
 
         if hasattr(alt_hyp_gen,'count') and hasattr(alt_hyp_gen,'chunk_size'):
@@ -575,7 +585,7 @@ class LEECorrectorMaster(LEECorrectorBase):
 
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
-                print("EventIDs:", EventIDs)
+                #print("EventIDs:", EventIDs)
                 a.record_alternate_logLs(neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
                 #print("...done")
                 #print("alterate hypothesis neg2logLs:", neg2logLs)
@@ -864,8 +874,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             samples = joint.sample(N)
             logw = tf.zeros((N,1),dtype=c.TFdtype)
 
-        print("in add_events: null_hyp:", self.null_hyp)
-        print("in add_events: samples:", samples)
+        #print("in add_events: null_hyp:", self.null_hyp)
+        #print("in add_events: samples:", samples)
 
         # Save events to database
         conn = self.connect_to_db()
@@ -1074,13 +1084,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             raise ValueError(msg)
         # par_size==-1 is ok, just means there were no nuisance parameters.
 
-        print("pars:", pars)
-        print("events_sq:", events_sq)
+        #print("pars:", pars)
+        #print("events_sq:", events_sq)
 
         joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
         quadf = joint_fitted_b.quad_loglike_f(events_sq)
 
-        print("quadf:", quadf)
+        #print("quadf:", quadf)
 
         return quadf 
 
@@ -1141,9 +1151,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
                      mask = (this_range[0] <= EventIDs) & (EventIDs < this_range[1])
                  if np.sum(mask)>0:
-                     print("EventIDs:", mask)
-                     print("mask:", mask)
-                     print("neg2logLs:", neg2logLs)
+                     #print("EventIDs:", mask)
+                     #print("mask:", mask)
+                     #print("neg2logLs:", neg2logLs)
                      neg2logL_batch = neg2logLs[mask]
                      if observed_mode:
                          eventID_batch = ['observed']
@@ -1343,7 +1353,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         batch_size = 10000
         continue_processing = True
         total_events = self.count_events()
-        bar = Bar("Performing fits of hypothesis '{0}' for analysis {1} in batches of {2}".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
+        bar = Bar("Performing fits of hypothesis '{0}' for analysis {1} in batches of {2} samples".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
         while continue_processing:
             EventIDs, events = self.load_N_events(batch_size,self.local_table+name,'neg2logL is NULL')
             if EventIDs is None:
