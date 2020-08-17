@@ -653,11 +653,11 @@ class JointDistribution(tfd.JointDistributionNamed):
             nuisance_i[ka] = {}
             for kp,p in a.items():
                 if kp in nuisance[ka].keys():
-                    N = p.shape[-1] if p.shape!=() else 1
+                    N = c.prod(nuisance[ka][kp]) or 1
                     nuisance_p[ka][kp] = p
                     nuisance_i[ka][kp] = (i, N)
                 elif kp in interest[ka].keys():
-                    N = p.shape[-1] if p.shape!=() else 1
+                    N = c.prod(interest[ka][kp]) or 1
                     interest_p[ka][kp] = p
                     interest_i[ka][kp] = (i, N)
                 elif kp in fixed[ka].keys():
@@ -681,9 +681,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         for aj in parj.values():
             for j,Nj in aj.values():
                 jlist += [jx for jx in range(j,j+Nj)] 
-        #print("H.shape:",H.shape)
-        #print("ilist:",ilist)
-        #print("jlist:",jlist)
+        print("H.shape:",H.shape)
+        print("ilist:",ilist)
+        print("jlist:",jlist)
         # Use gather to extract row/column slices from Hessian
         if len(ilist)>0:
             subH_i = tf.gather(H,      ilist, axis=idim)
@@ -730,6 +730,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("samples:", samples)
         print("interest_p:", interest_p)
         print("nuisance_p:", nuisance_p)
+        print("interest_i:", interest_i)
+        print("nuisance_i:", nuisance_i)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
         print("Hii:", Hii)
         print("Hnn:", Hnn)
@@ -801,18 +803,25 @@ class JointDistribution(tfd.JointDistributionNamed):
             print("theta_0.shape:", theta_0.shape)
             print("A.shape:", A.shape)
             print("B.shape:", B.shape)
-   
+
+            print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
+            print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
+            print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
+    
             # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
             theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
             #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
             #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
 
             print("theta_prof.shape:", theta_prof.shape)
+            batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
 
             # de-stack analytically profiled nuisance parameters
-            theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,t0_bshape) 
+            theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 
             
             # Compute -2*log_prob
+            print("theta_prof_dict:", theta_prof_dict)
+            print("signal:", signal)
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
@@ -837,7 +846,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("samples:", samples)
         print("matched_samples:", matched_samples)
         print("q:", q)
-        return c.squeeze_to(q,2,dont_squeeze=[0])
+        return q #c.squeeze_to(q,2,dont_squeeze=[0])
 
     def bcast_batch_shape_tensor(self):
         """The built-in batch_shape_tensor method for NamedJointDistribution in

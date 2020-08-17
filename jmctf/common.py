@@ -488,14 +488,17 @@ def loose_squeeze(tensor,axis):
         out = tensor
     return out
 
-def cat_pars_to_tensor(pars,par_shapes):
+def cat_pars_to_tensor(pars,par_shapes,flatten_batch=True):
     """Combine a dictionary of parameters into a single tensor,
        broadcasting all batch_shape dimensions against each
-       other and then flattening them to 1D, and flattening
+       other, and flattening
        all "parameter_shape" dimensions before concatenating
-       everything to a single 2D tensor.
+       everything to a single tensor of shape (batch_shape,n_flat_pars).
        Operation reversed (broadcast is not undone) by
        decat_tensor_to_pars
+
+       If flatten_batch is True then the batch_shape is also flattened,
+       so that the output is a 2D tensor.
 
        Error thrown if broadcast is not possible.
 
@@ -545,8 +548,10 @@ def cat_pars_to_tensor(pars,par_shapes):
 
             # Reshape to 2D. I think this should just work...
             npars = prod(par_shapes[ka][kp])
-            new_shape = [prod(max_batch_shape),npars]
-
+            if flatten_batch:
+                new_shape = [prod(max_batch_shape),npars]
+            else:
+                new_shape = [d for d in max_batch_shape]+[npars]
             #print("bcast_par:", bcast_par)
             #print("max_batch_shape:", max_batch_shape)
             #print("new_shape:", new_shape)
@@ -560,9 +565,10 @@ def cat_pars_to_tensor(pars,par_shapes):
 
     # Do the final concatenation along the "parameter" axis
     if len(matched_parlist)!=0:
-        catted = tf.concat(matched_parlist,axis=1)
+        catted = tf.concat(matched_parlist,axis=-1)
     else:
-        catted = None
+        msg = "Failed to concatenate parameters into tensor!"
+        raise ValueError(msg)
     return catted, max_batch_shape, col_names_list
 
 def decat_tensor_to_pars(tensor,par_template,par_shapes,batch_shape):
@@ -582,7 +588,7 @@ def decat_tensor_to_pars(tensor,par_template,par_shapes,batch_shape):
                 msg = "Failed to extract parameters from input tensor! 'par_shapes' dictionary did not contain the basic shape of parameter {0} in analysis {1}! par_shapes was: {2}".format(kp,ka,par_shapes)
                 raise ValueError(msg)            
             n = prod(par_shapes[ka][kp])
-            par_slice = tensor[:,i:i+n]
+            par_slice = tensor[...,i:i+n]
             #print("par_slice:", par_slice)
             new_shape = [d for d in batch_shape] + [d for d in par_shapes[ka][kp]]
             #print("batch_shape:", batch_shape)

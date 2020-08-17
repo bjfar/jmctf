@@ -567,8 +567,10 @@ class LEECorrectorMaster(LEECorrectorBase):
             for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
                 #print("running quad:",name)
                 neg2logLs = quad({name: alt_chunk[name]})
-                if len(neg2logLs.shape)!=2:
-                    msg = "Shape of neg2logLs array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=hypotheses, dim[1]=events).".format(name,neg2logLs.shape)
+                if len(neg2logLs.shape)==1:
+                    neg2logLs = tf.expand_dims(neg2logLs,axis=0) # Add in "events" dimension if it was missing due to only one event.
+                elif len(neg2logLs.shape)!=2:
+                    msg = "Shape of neg2logLs array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=events, dim[1]=hypotheses), or 1D if only one event is being processed.".format(name,neg2logLs.shape)
                     raise ValueError(msg)
 
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
@@ -1002,8 +1004,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             observed_mode = False
 
         nuis_shapes = self.analysis.nuisance_parameter_shapes()
-        par_tensor_2D, batch_shape, cols = c.cat_pars_to_tensor(fitted_pars,nuis_shapes)
- 
+        nuis_indices = c.get_parameter_indices(nuis_shapes)
+
+        cols = []
+        for par,shape in nuis_shapes.items():
+            for indices in nuis_indices[par]:
+                cols += ["{0}::{1}{2}".format(self.analysis.name,par,indices)]
+
         if len(cols)>0:
             conn = self.connect_to_db()
             cur = conn.cursor()
@@ -1018,13 +1025,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 # Convert back into dictionary of tensorflow tensors
                 # Start by converting to one big tensor
                 alldata = tf.convert_to_tensor(results, dtype=c.TFdtype)
-                i = 0
-                pars = {}
-                for par,size in nuis_structure.items():
-                    #pars[par] = tf.expand_dims(alldata[:,i:i+size],axis=1) # insert the 'alternate hypothesis' parameter dimension
-                    pars[par] = alldata[:,i:i+size]
-                    i+=size
-                nuis_pars = {self.analysis.name: pars}
+                par_template = {self.analysis.name: nuis_shapes} # The shapes can also be used as an ordering template in this case
+                batch_shape = (len(alldata),) # Only ever stored as 1D batch
+                nuis_pars = c.decat_tensor_to_pars(alldata,par_template,par_template,batch_shape)
             else:
                 nuis_pars = None # No fitted parameters found in output; probably fits weren't done yet. Let calling code decide if this is an error.
         else:
@@ -1356,10 +1359,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 cols = ["neg2logL"]
                 fitted_pars_b = nuis_pars_b["fitted"]
 
-                # Flatten parameters to single 2D tensor
-                par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars_b,joint.parameter_shapes())
-                arrays += [par_tensor_2D]
-                cols += flat_par_names
+                n_pars = len([p for a in fitted_pars_b.values() for p in a.values()]) 
+                if n_pars>0:
+                    # Flatten parameters to single 2D tensor
+                    par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars_b,joint.parameter_shapes())
+                    arrays += [par_tensor_2D]
+                    cols += flat_par_names
+                # Else no nuisance parameters! Did no fitting, just evaluated the log_prob directly.
 
                 allpars = tf.concat(arrays,axis=-1)               
                 data = pd.DataFrame(allpars.numpy(),index=EventIDs.numpy(),columns=cols)
@@ -1381,10 +1387,13 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             cols = ['neg2logL']
             fitted_pars = pars["fitted"]
 
-            # Flatten parameters to single 2D tensor
-            par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars,joint.parameter_shapes())
-            arrays += [par_tensor_2D]
-            cols += flat_par_names
+            n_pars = len([p for a in fitted_pars_b.values() for p in a.values()]) 
+            if n_pars>0:
+                # Flatten parameters to single 2D tensor
+                par_tensor_2D, batch_shape, flat_par_names = c.cat_pars_to_tensor(fitted_pars,joint.parameter_shapes())
+                arrays += [par_tensor_2D]
+                cols += flat_par_names
+            # Else no nuisance parameters! Did no fitting, just evaluated the log_prob directly.
 
             allpars = tf.concat(arrays,axis=-1)               
             data = pd.DataFrame(allpars.numpy(),columns=cols)

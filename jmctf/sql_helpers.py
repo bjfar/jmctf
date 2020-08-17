@@ -4,9 +4,9 @@ import numpy as np
 
 def create_table(cursor,table_name,columns):
     """Create an SQLite table if it doesn't already exist"""
-    command = "CREATE TABLE IF NOT EXISTS '{0}' ({1} {2}".format(table_name,columns[0][0],columns[0][1])
+    command = "CREATE TABLE IF NOT EXISTS `{0}` (`{1}` {2}".format(table_name,columns[0][0],columns[0][1])
     for col, t in columns[1:]:
-        command += ",{0} {1}".format(col,t)
+        command += ",`{0}` {1}".format(col,t)
     command += ")"  
     #print("command:",command)
     cursor.execute(command)
@@ -18,7 +18,7 @@ def add_columns(cursor,table_name,columns):
     results = cursor.fetchall()
     existing_cols = [row[1] for row in results]
     # Have to add columns one at a time. Oh well, apparently should be fast anyway.
-    commands = ["ALTER TABLE {0} ADD COLUMN {1} {2}".format(table_name,col,t) for col,t in columns if col not in existing_cols]
+    commands = ["ALTER TABLE `{0}` ADD COLUMN `{1}` {2}".format(table_name,col,t) for col,t in columns if col not in existing_cols]
     for command in commands:
        cursor.execute(command)
 
@@ -30,20 +30,20 @@ def upsert(cursor,table_name,df,primary):
     rec = df.to_records()
     #print("rec:",rec)
     columns = df.to_records().dtype.names  
-    command = "INSERT INTO '{0}' ({1}".format(table_name,columns[0])
+    command = "INSERT INTO `{0}` (`{1}`".format(table_name,columns[0])
     if len(columns)>1:
         for col in columns[1:]:
-            command += ",{0}".format(col)
+            command += ",`{0}`".format(col)
     command += ") VALUES (?"
     if len(columns)>1:
         for col in columns[1:]:
             command += ",?"
     command += ")"
     if len(columns)>1:
-        command += " ON CONFLICT({0}) DO UPDATE SET ".format(primary)
+        command += " ON CONFLICT(`{0}`) DO UPDATE SET ".format(primary)
         for j,col in enumerate(columns):
             if col is not primary:
-                command += "{0}=excluded.{0}".format(col)
+                command += "`{0}`=excluded.`{0}`".format(col)
                 if j<len(columns)-1: command += ","
     #print("command:", command)
     cursor.executemany(command,  map(tuple, rec.tolist())) # sqlite3 doesn't understand numpy types, so need to convert to standard list. Seems fast enough though.
@@ -54,22 +54,22 @@ def upsert_if_smaller(cursor,table_name,df,primary):
     rec = df.to_records()
     #print("rec:",rec)
     columns = df.to_records().dtype.names  
-    command = "INSERT INTO {0} ({1}".format(table_name,columns[0])
+    command = "INSERT INTO `{0}` (`{1}`".format(table_name,columns[0])
     if len(columns)>1:
         for col in columns[1:]:
-            command += ",{0}".format(col)
+            command += ",`{0}`".format(col)
     command += ") VALUES (?"
     if len(columns)>1:
         for col in columns[1:]:
             command += ",?"
     command += ")"
     if len(columns)>1:
-        command += " ON CONFLICT({0}) DO UPDATE SET ".format(primary)
+        command += " ON CONFLICT(`{0}`) DO UPDATE SET ".format(primary)
         for j,col in enumerate(columns):
             if col is not primary:
-                command += "{0} = CASE".format(col)
-                command += "      WHEN {0}<excluded.{0} THEN {0}".format(col)
-                command += "      ELSE excluded.{0}".format(col)
+                command += "`{0}` = CASE".format(col)
+                command += "      WHEN `{0}`<excluded.`{0}` THEN `{0}`".format(col)
+                command += "      ELSE excluded.`{0}`".format(col)
                 command += "      END"
                 if j<len(columns)-1: command += ","
     #print("command:", command)
@@ -116,14 +116,14 @@ def load(cursor,table_name,cols,keys=None,primary=None):
 
     command = "SELECT "
     for col in cols:
-        command += col+","
+        command += "`{0}`,".format(col)
     command = command[:-1]
     command += " from `{0}`".format(table_name)
 
     if keys is not None:
         command += " WHERE "
         for i,(start, stop) in enumerate(ranges):
-            command += " {0} BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
+            command += " `{0}` BETWEEN {1} and {2}".format(primary,start,stop) # inclusive 'between' 
             if i<len(ranges)-1: command += " OR "
     print("command:", command)
     cursor.execute(command)
