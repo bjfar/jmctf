@@ -497,10 +497,10 @@ class LEECorrectorMaster(LEECorrectorBase):
             EventIDs = EventIDs.numpy()
 
         for name,a in self.LEEanalyses.items():
-            pars = a.load_bg_nuis_pars(EventIDs)
+            pars = a.load_null_nuis_pars(EventIDs)
             if pars is None:
-                raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all background fits been done?")
-            events = c.add_prefix(name,a.load_events(EventIDs))
+                raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all null hypothesis fits been done?")
+            events = c.add_prefix(name,a.load_events_with_IDs(EventIDs))
             #print("loaded events:", events)
             quads += [a.compute_quad(pars,events)]
 
@@ -794,10 +794,28 @@ class LEECorrectorMaster(LEECorrectorBase):
     def add_to_database(self):
         pass
 
-    #def compute_quad(self,data):
-    #    """Compute quadratic approximations of profile likelihood for a set of
-    #       data"""
-    #    pass
+    def load_all_events(self,with_IDs=False):
+        """Retrieve all events currently on disk. Mainly for manual inspection/debugging purposes.
+           Events returned in dict format as if all analyses were part of one big JointDistribution object."""
+        event_dict = {}
+        EventIDs = None
+        for aname, LEEa in self.LEEanalyses.items():
+            EventIDs, events = LEEa.load_events()
+            # EventIDs should be the same across analyses. TODO: could add a check for this
+            event_dict.update(events)
+        if with_IDs:
+            return EventIDs, event_dict
+        else:
+            return event_dict
+
+    def load_all_null_nuis_pars(self):
+        """Retrieve all nuisance parameter fits to null hypothesis. Mainly for manual inspect/debugging purposes"""
+        par_dict = {}
+        EventIDs, event_dict = self.load_all_events(with_IDs=True)
+        for aname, LEEa in self.LEEanalyses.items():
+            pars = LEEa.load_null_nuis_pars(EventIDs)
+            par_dict.update(pars)
+        return par_dict
 
 class LEECorrectorAnalysis(LEECorrectorBase):
     """A class to wrap up a SINGLE analysis with connection to output sql database,
@@ -906,24 +924,28 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         #print("Took {0} seconds".format(end-start))
         return logw
 
-    def load_N_events(self,N,reftable,condition=None,offset=0):
-        """Loads N events from database where 'condition' is true in 'reftable'
+    def load_events(self,N=-1,reftable=None,condition=None,offset=0):
+        """Loads N (or all by default) events from database where 'condition' is true in 'reftable'
            To skip rows, set 'offset' to the first row to be considered."""
         structure = self.analysis.event_shapes()
         conn = self.connect_to_db()
         cur = conn.cursor()
 
-        # First see if reference table even exists yes
-        if not sql.check_table_exists(cur,reftable):
-            condition = None # Ignore conditions if reference table doesn't exist yet. Cannot possible match on them.
+        if reftable is not None:
+            # First see if reference table even exists yes
+            if not sql.check_table_exists(cur,reftable):
+                condition = None # Ignore conditions if reference table doesn't exist yet. Cannot possible match on them.
+            else:
+                # See if any data is in the reference table yet:
+                cur.execute("SELECT Count(EventID) FROM `{0}`".format(reftable))
+                results = cur.fetchall()
+                nrows = results[0][0]
+                if nrows == 0:
+                    # No data; so nothing to match on
+                    condition = None
         else:
-            # See if any data is in the reference table yet:
-            cur.execute("SELECT Count(EventID) FROM `{0}`".format(reftable))
-            results = cur.fetchall()
-            nrows = results[0][0]
-            if nrows == 0:
-                # No data; so nothing to match on
-                condition = None
+            # No reference table supplied, so no filter condition can be used.
+            condition = None
 
         command = "SELECT A.EventID"
         for name, size in structure.items():
@@ -974,7 +996,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         self.close_db(conn) 
         return results[0][0]
 
-    def load_events(self,EventIDs):
+    def load_events_with_IDs(self,EventIDs):
         """Loads events with the given eventIDs"""
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
@@ -1005,8 +1027,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 events = None
         return events
 
-    def load_bg_nuis_pars(self,EventIDs):
-        """Loads fitted background-only nuisance parameter values for the selected
+    def load_null_nuis_pars(self,EventIDs):
+        """Loads fitted null hypothesis nuisance parameter values for the selected
            events"""
         if isinstance(EventIDs, str) and EventIDs=='observed':
             observed_mode = True
@@ -1355,7 +1377,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         total_events = self.count_events()
         bar = Bar("Performing fits of hypothesis '{0}' for analysis {1} in batches of {2} samples".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
         while continue_processing:
-            EventIDs, events = self.load_N_events(batch_size,self.local_table+name,'neg2logL is NULL')
+            EventIDs, events = self.load_events(batch_size,self.local_table+name,'neg2logL is NULL')
             if EventIDs is None:
                 # No events left to process
                 continue_processing = False

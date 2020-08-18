@@ -92,3 +92,22 @@ plotting.plot_chi2(ax,LLR,DOF)
 ax.legend(loc=1, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
 fig.tight_layout()
 fig.savefig("LEE_simple_test_plot_LLR.svg")
+
+# For debugging: plot sample and MLE distributions
+import matplotlib.pyplot as plt
+from jmctf.plotting import plot_sample_dist, plot_MLE_dist, plot_chi2
+
+samples = lee.load_all_events() # Loads all events currently on disk
+fig, ax_dict = plot_sample_dist(samples)
+#plt.show()
+fig.tight_layout()
+fig.savefig("LEE_simple_test_sample_dists.svg")
+
+null_nuis_pars = lee.load_all_null_nuis_pars() # Loads all fits of nuisance parameters under the null hypothesis currently on disk
+print("null_nuis_pars:", null_nuis_pars)
+if null_nuis_pars != {}: # No nuisance parameters!
+    fig, ax_dict = plot_MLE_dist(null_nuis_pars)
+    #plot_MLE_dist(par_dicts_nuis["fitted"],ax_dict) # Overlay nuis MLE dists onto full MLE dists
+    fig.tight_layout()
+    fig.savefig("LEE_simple_test_MLE_dists.svg")
+
