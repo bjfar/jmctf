@@ -50,7 +50,10 @@ def plot_collection(data,ax_dict=None,**kwargs):
                     ax.set(yscale="log")
                 else:
                     ax = ax_dict[aname][v][k]
-                sns.distplot(val[...,k], kde=False, ax=ax, norm_hist=True, **kwargs)
+                if s==1:
+                    sns.distplot(val, kde=False, ax=ax, norm_hist=True, **kwargs)
+                else:
+                    sns.distplot(val[...,k], kde=False, ax=ax, norm_hist=True, **kwargs)
                 j+=1
     if ax_dict is None:
         return fig, ax_dict_out

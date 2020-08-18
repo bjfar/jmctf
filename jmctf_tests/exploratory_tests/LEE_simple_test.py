@@ -3,21 +3,26 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from jmctf import NormalAnalysis, BinnedAnalysis, JointDistribution, plotting
+from jmctf import NormalAnalysis, NormalTEAnalysis, BinnedAnalysis, JointDistribution, plotting
 
 # Create component analysis objects
 x_obs = 5.
 sigma = 2.
-norm = NormalAnalysis("Test normal", x_obs, sigma)
+
+# No-nuisance parameters:
+#norm = NormalAnalysis("Test normal", x_obs, sigma)
+# One nuisance parameter (sigma_t):
+norm = NormalTEAnalysis("Test normal", x_obs, sigma)
+
 analyses = [norm]
 
 # For this test, the "mu" parameter for NormalAnalysis will be the
 # one we use to create our set of alternate hypothesis
 
-N = 100 # Number of alternate hypotheses to generate (controls density of hypotheses)
+N = 200 # Number of alternate hypotheses to generate (controls density of hypotheses)
 null_mu = 0
-mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
-#mu = [0]
+#mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
+mu = np.array([0])
 
 class SigGen:
     """Object to supply signal hypotheses in chunks
@@ -43,8 +48,14 @@ class SigGen:
 
 import tensorflow as tf
 import jmctf.common as c
-null_hyp = {"Test normal": {"mu": 0}}
-alt_hyp = {"Test normal": {"mu": mu}} 
+#null_hyp = {"Test normal": {"mu": 0}}
+#alt_hyp = {"Test normal": {"mu": mu}} 
+# With fixed parameter for normalte version:
+sigma_t = 1.
+bcast = 1+0*mu # simple trick to broadcast sigma_t. NOTE: Broadcasting can be done automatically in LEE object, this is just for the sake of keeping SigGen simple.
+null_hyp = {"Test normal": {"mu": 0, "sigma_t": sigma_t}}
+alt_hyp = {"Test normal": {"mu": mu, "sigma_t": sigma_t*bcast}} 
+
 DOF = 1
 
 # Hypothesis generator function for use with LEE in tests
@@ -96,19 +107,16 @@ fig.tight_layout()
 fig.savefig("LEE_simple_test_plot_LLR.svg")
 
 # For debugging: plot sample and MLE distributions
-import matplotlib.pyplot as plt
-from jmctf.plotting import plot_sample_dist, plot_MLE_dist, plot_chi2
-
 samples = lee.load_all_events() # Loads all events currently on disk
-fig, ax_dict = plot_sample_dist(samples)
+fig, ax_dict = plotting.plot_sample_dist(samples)
 #plt.show()
 fig.tight_layout()
 fig.savefig("LEE_simple_test_sample_dists.svg")
 
 null_nuis_pars = lee.load_all_null_nuis_pars() # Loads all fits of nuisance parameters under the null hypothesis currently on disk
-print("null_nuis_pars:", null_nuis_pars)
+#print("null_nuis_pars:", null_nuis_pars)
 if null_nuis_pars != {}: # No nuisance parameters!
-    fig, ax_dict = plot_MLE_dist(null_nuis_pars)
+    fig, ax_dict = plotting.plot_MLE_dist(null_nuis_pars)
     #plot_MLE_dist(par_dicts_nuis["fitted"],ax_dict) # Overlay nuis MLE dists onto full MLE dists
     fig.tight_layout()
     fig.savefig("LEE_simple_test_MLE_dists.svg")
