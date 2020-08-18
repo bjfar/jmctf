@@ -371,8 +371,8 @@ class LEECorrectorMaster(LEECorrectorBase):
 
         # Table for recording final profiled (i.e. best-fit) test statistic results
         comb_cols = [ ("EventID", "integer primary key")
-                     ,("neg2logL", "real")
-                     ,("neg2logL_quad", "real")
+                     ,("log_prob", "real")
+                     ,("log_prob_quad", "real")
                      ,("logw", "real")]
         colnames = [x[0] for x in comb_cols]
 
@@ -410,7 +410,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         # Do this by just inserting null data and letting the EventID column auto-increment
         conn = self.connect_to_db()
         cur = conn.cursor()
-        command = "INSERT INTO {0} (neg2logL,logw) VALUES (?,?)".format(self.profiled_table)
+        command = "INSERT INTO {0} (log_prob,logw) VALUES (?,?)".format(self.profiled_table)
         vals = [(None,logwi[0]) for logwi in logw.numpy().tolist()]
         cur.executemany(command,  vals) 
         self.close_db(conn)
@@ -429,12 +429,12 @@ class LEECorrectorMaster(LEECorrectorBase):
             else:
                 a.process_alternate_local(alt_hyp,name)
    
-        # Fits completed; extract all results and get combined neg2logL values
+        # Fits completed; extract all results and get combined log_prob values
         comb = None
         for a in self.LEEanalyses.values():
             if alt_hyp is None: table = a.local_table+a.nullname
             else: table = a.local_table+name
-            df = a.load_results(table,['EventID','neg2logL'])
+            df = a.load_results(table,['EventID','log_prob'])
             #print("df:",df)
             if comb is None: 
                 comb = df
@@ -442,9 +442,9 @@ class LEECorrectorMaster(LEECorrectorBase):
                 comb += df
         conn = self.connect_to_db()
         cur = conn.cursor()
-        if alt_hyp is None: table = self.local_table+self.nullname
+        if alt_hyp is None: table = self.null_table
         else: table = self.local_table+name
-        sql.create_table(cur,table,[('EventID','integer primary key'),('neg2logL','real')])
+        sql.create_table(cur,table,[('EventID','integer primary key'),('log_prob','real')])
         sql.upsert(cur,table,comb,'EventID')
         self.close_db(conn)
 
@@ -469,7 +469,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         else:
             # Else just add the observed value for the null hypothesis likelihood
             comb = None
-            cols = ['neg2logL'] # We never use the quad approximation for the null likelihood, since this is the point we expand around.
+            cols = ['log_prob'] # We never use the quad approximation for the null likelihood, since this is the point we expand around.
             for a in self.LEEanalyses.values():
                 table = a.local_table+a.nullname+"_observed"
                 df = a.load_results(table,cols)
@@ -481,8 +481,8 @@ class LEECorrectorMaster(LEECorrectorBase):
             conn = self.connect_to_db()
             cur = conn.cursor()
             col_info = [('EventID','integer primary key')]+[(col,'real') for col in cols]
-            sql.create_table(cur,self.local_table+self.nullname+'_observed',col_info)
-            sql.upsert(cur,self.local_table+self.nullname+'_observed',comb,primary='EventID')
+            sql.create_table(cur,self.null_table+'_observed',col_info)
+            sql.upsert(cur,self.null_table+'_observed',comb,primary='EventID')
             self.close_db(conn)
 
 
@@ -540,6 +540,9 @@ class LEECorrectorMaster(LEECorrectorBase):
                 msg = gen_msg1 + " The 'next' method did not return a (dictionary,array) tuple (the first member of the tuple was not a dictionary).\n"+gen_msg2
                 raise ValueError(gen_msg)
 
+            # Try to convert the dict bottom-level values to tensors
+            alt_chunk = c.convert_to_TF_constants(alt_chunk)
+
             # Check that dict has correct structure
             gen_msg3 = "The dictionary returned by the 'next' method does not have the correct structure. It should be a dictionary of parameter dictionaries"
             hyp_size = None # Size of hypothesis dimension
@@ -586,7 +589,7 @@ class LEECorrectorMaster(LEECorrectorBase):
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
                 #print("EventIDs:", EventIDs)
-                a.record_alternate_logLs(neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
+                a.record_alternate_logLs(-0.5*neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
                 #print("...done")
                 #print("alterate hypothesis neg2logLs:", neg2logLs)
                 if comb_neg2logLs is None:
@@ -609,22 +612,22 @@ class LEECorrectorMaster(LEECorrectorBase):
         elif min_neg2logLs is None:
             msg = "Problem processing alternate hypotheses! Result of batch was None!"
             raise ValueError(msg)
-        return min_neg2logLs  
+        return -0.5*min_neg2logLs # Convert to log_prob convention  
  
     def process_alternate_observed(self,alt_hyp_gen,quad_only=True,dbtype='hdf5'):
         """Perform fits for all supplied alternate hypotheses, for just the *observed* data"""
-        min_neg2logLs = self._process_alternate_batch(alt_hyp_gen,"observed",dbtype)
+        max_log_prob = self._process_alternate_batch(alt_hyp_gen,"observed",dbtype)
         
         # Extract data for null hypothesis (should be pre-computed by process_null)
 
               
-        # Write the compute min_neg2logLs to disk for this batch of events
-        data = pd.DataFrame(min_neg2logLs.numpy(),columns=['neg2logL_quad'])
+        # Write the compute min_neg2logL to disk for this batch of events
+        data = pd.DataFrame(max_log_prob.numpy(),columns=['log_prob_quad'])
         data.index.name = 'EventID' 
  
         conn = self.connect_to_db()
         cur = conn.cursor()
-        sql.upsert_if_smaller(cur,self.profiled_table+"_observed",data,'EventID') # Only replace existing values if new ones are smaller
+        sql.upsert_if_larger(cur,self.profiled_table+"_observed",data,'EventID') # Only replace existing values if new ones are larger
         self.close_db(conn)
 
 
@@ -646,20 +649,20 @@ class LEECorrectorMaster(LEECorrectorBase):
         while still_processing:
             print("Processing event batch {0} of {1} (batch_size={2})".format(batchi,N_event_batches,event_batch_size))
             if new_events_only:
-                EventIDs = self.load_eventIDs(event_batch_size,self.profiled_table,'neg2logL_quad is NULL')
+                EventIDs = self.load_eventIDs(event_batch_size,self.profiled_table,'log_prob_quad is NULL')
             else:
                 EventIDs = self.load_eventIDs(event_batch_size,offset=offset)
                 offset += event_batch_size
             if EventIDs is None: still_processing = False
             if still_processing:
-                min_neg2logLs = self._process_alternate_batch(alt_hyp_gen(),EventIDs,dbtype)              
+                max_log_prob = self._process_alternate_batch(alt_hyp_gen(),EventIDs,dbtype)              
                 # Write the compute min_neg2logLs to disk for this batch of events
-                data = pd.DataFrame(min_neg2logLs.numpy(),index=EventIDs.numpy(),columns=['neg2logL_quad'])
+                data = pd.DataFrame(max_log_prob.numpy(),index=EventIDs.numpy(),columns=['log_prob_quad'])
                 data.index.name = 'EventID' 
  
                 conn = self.connect_to_db()
                 cur = conn.cursor()
-                sql.upsert_if_smaller(cur,self.profiled_table,data,'EventID') # Only replace existing values if new ones are smaller
+                sql.upsert_if_larger(cur,self.profiled_table,data,'EventID') # Only replace existing values if new ones are smaller
                 self.close_db(conn)
 
                 batchi+=1
@@ -1047,9 +1050,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             conn = self.connect_to_db()
             cur = conn.cursor()
             if observed_mode:
-                results = sql.load(cur,self.local_table+self.nullname+"_observed",cols,[0],'EventID')
+                results = sql.load(cur,self.null_table+"_observed",cols,[0],'EventID')
             else:
-                results = sql.load(cur,self.local_table+self.nullname,cols,EventIDs,'EventID')
+                results = sql.load(cur,self.null_table,cols,EventIDs,'EventID')
             self.close_db(conn) 
 
             # Convert back to dict of tensors
@@ -1074,9 +1077,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            with other analyses. 
         """
         # Run full numerical fits of nuisance parameters for all alternate hypotheses
-        qsb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(events, alt_hyp, log_tag='qsb')
+        log_prob_sb, joint_fitted_sb, nuis_pars_s = self.joint.fit_nuisance(events, alt_hyp, log_tag='qsb')
 
-        return qsb
+        return log_prob_sb
 
     def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
@@ -1116,7 +1119,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         return quadf 
 
-    def record_alternate_logLs(self,neg2logLs,altIDs,EventIDs,Ltype,dbtype='hdf5'):
+    def record_alternate_logLs(self,log_probs,altIDs,EventIDs,Ltype,dbtype='hdf5'):
         """Record likelihoods from a batch of alternate hypothesis fits to 'full' tables.
            In this case ID numbers also need to be assigned to alternate hypotheses,
            so that we can uniquely assign each of them to a row in the
@@ -1130,8 +1133,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             raise ValueError("Sorry, alternate hypothesis fit result recording has so far only been implemented for the 'quadratic approximation' results.")
 
         # Sanity check input shapes
-        if len(neg2logLs.shape) != 2:
-            msg = "neg2logLs supplied for recording are not 2D! Dim 0 should correspond to trials/events/pseudoexperiments/samples, while dim 1 should correspond to 'alternate hypotheses'. Any other dimensions are not valid (e.g. alternate hypothesis arrays must be flattened to 1D). Shape was: {0}".format(neg2logLs.shape)
+        if len(log_probs.shape) != 2:
+            msg = "log_probs supplied for recording are not 2D! Dim 0 should correspond to trials/events/pseudoexperiments/samples, while dim 1 should correspond to 'alternate hypotheses'. Any other dimensions are not valid (e.g. alternate hypothesis arrays must be flattened to 1D). Shape was: {0}".format(neg2logLs.shape)
             raise ValueError(msg)
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
@@ -1139,7 +1142,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             observed_mode = False
         
-        if neg2logLs.shape[1]>0:
+        if log_probs.shape[1]>0:
             if dbtype is 'hdf5':
                 if observed_mode:
                     fname = '{0}_observed.hdf5'.format(self.db)
@@ -1152,7 +1155,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             else:
                 raise ValueError("Unrecognised database type selected!")
 
-            # # First split up neg2logLs into batches to be saved in various of the 'full' tables.
+            # # First split up log_probs into batches to be saved in various of the 'full' tables.
             # # E.g. events in the range 0-999 need to go in table 0, 1000-1999 in table 1, etc.
             # # We will assume that EventIDs already come in ascending order. TODO: Add check for this.
             if observed_mode:
@@ -1176,7 +1179,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      #print("EventIDs:", mask)
                      #print("mask:", mask)
                      #print("neg2logLs:", neg2logLs)
-                     neg2logL_batch = neg2logLs[mask]
+                     log_prob_batch = log_probs[mask]
                      if observed_mode:
                          eventID_batch = ['observed']
                      else:
@@ -1213,7 +1216,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      col_names = [x[0] for x in columns]
                      #print("neg2logL_batch:", neg2logL_batch.numpy().T)
                      #print("col_names:", col_names)
-                     data = pd.DataFrame(neg2logL_batch.numpy().T,columns=col_names)
+                     data = pd.DataFrame(log_prob_batch.numpy().T,columns=col_names)
 
                      if dbtype is 'hdf5':
                          # For hdf5 we don't need to use separate tables, we'll just make one dataset for every event, and extend them as needed.
@@ -1343,7 +1346,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # Actually we also need the background-only neg2logL values, so grab those too
         # I think here it is fine, and easier, to load them all and do the selection in RAM.
         if len(bootstrap_EventIDs)>0:
-            df = self.load_results(self.local_table+self.nullname,['EventID','neg2logL'])
+            df = self.load_results(self.null_table,['EventID','neg2logL'])
             background_neg2logL = tf.constant(df.loc[bootstrap_EventIDs]['neg2logL'].to_numpy(),dtype=c.TFdtype) 
         else:
             background_neg2logL = None
@@ -1377,18 +1380,18 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         total_events = self.count_events()
         bar = Bar("Performing fits of hypothesis '{0}' for analysis {1} in batches of {2} samples".format(name,self.analysis.name,batch_size), max=np.ceil(total_events/batch_size))
         while continue_processing:
-            EventIDs, events = self.load_events(batch_size,self.local_table+name,'neg2logL is NULL')
+            EventIDs, events = self.load_events(batch_size,self.local_table+name,'log_prob is NULL')
             if EventIDs is None:
                 # No events left to process
                 continue_processing = False
             if continue_processing:
                 #print("Fitting w.r.t background-only samples")
-                qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, alt_hyp, log_tag='q_'+name)
+                log_prob_b, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, alt_hyp, log_tag='q_'+name)
                 #print("nuis_pars_b:", nuis_pars_b)
                 # Write events to output database               
                 # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
-                arrays = [fix_dims(qb)]
-                cols = ["neg2logL"]
+                arrays = [fix_dims(log_prob_b)]
+                cols = ["log_prob"]
                 fitted_pars_b = nuis_pars_b["fitted"]
 
                 n_pars = len([p for a in fitted_pars_b.values() for p in a.values()]) 
@@ -1414,9 +1417,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         if null_case:
             Osamples = joint.Osamples
             # Also record results for fit to observed data
-            qbO, joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp) 
-            arrays = [fix_dims(qbO)]
-            cols = ['neg2logL']
+            log_prob_bO, joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp) 
+            arrays = [fix_dims(log_prob_bO)]
+            cols = ['log_prob']
             fitted_pars = pars["fitted"]
 
             n_pars = len([p for a in fitted_pars_b.values() for p in a.values()]) 
@@ -1454,21 +1457,21 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             
             # Fit distributions for Asimov datasets for the other half of each
             # likelihood ratio
-            qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, self.null_hyp, log_tag='bAsb')
-            qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, alt_hyp, log_tag='sbAsb')
+            log_prob_bAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, self.null_hyp, log_tag='bAsb')
+            log_prob_sbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, alt_hyp, log_tag='sbAsb')
 
-            qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
-            qAb = (qsbAb - qbAb)[0]
+            qAsb = -2*(log_prob_sbAsb - log_prob_bAsb)[0] # extract single sample result
+            qAb = -2*(log_prob_sbAb - log_prob_bAb)[0]
  
             # ...and fit the observed data too!
             Osamples = joint.Osamples
-            qbO , joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp)
-            qsbO, joint_fitted, pars = joint.fit_nuisance(Osamples, alt_hyp)
-            qO = (qsbO - qbO)[0] # extract single sample result
+            log_prob_bO , joint_fitted, pars = joint.fit_nuisance(Osamples, self.null_hyp)
+            log_prob_sbO, joint_fitted, pars = joint.fit_nuisance(Osamples, alt_hyp)
+            qO = -2*(log_prob_sbO - log_prob_bO)[0] # extract single sample result
 
             # Record everything!
             cols = ['qAsb','qAb','qO','neg2logL_quad','neg2logL']
-            d = np.array([v.numpy() for v in [qAsb,qAb,qO,qsbO]])
+            d = np.array([v.numpy() for v in [qAsb,qAb,qO,-2*log_prob_sbO]]) # TODO: I don't see how this naming makes sense (what is "quad" about this?), need to revisit this and remember what it is used for.
             data = pd.DataFrame(d.T,columns=cols[:-1]) # don't have the full MC likelihood results here, but want the column to exist for future insertion
             data.index.rename('EventID',inplace=True)
             #print("data:",data)

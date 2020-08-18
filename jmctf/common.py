@@ -310,6 +310,11 @@ def deep_size(d,axis=0):
                 pass
             elif size!=size_v:
                 size = None
+    elif axis==0:
+        try:
+            size = len(d)
+        except TypeError:
+            size = d.shape[0]
     else:
         size = d.shape[axis]
     return size

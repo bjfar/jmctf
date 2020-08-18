@@ -17,6 +17,7 @@ analyses = [norm]
 N = 100 # Number of alternate hypotheses to generate (controls density of hypotheses)
 null_mu = 0
 mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
+#mu = [0]
 
 class SigGen:
     """Object to supply signal hypotheses in chunks
@@ -79,11 +80,12 @@ lee.process_null()
 lee.process_alternate(get_hyp_gen,new_events_only=True)
 
 # Load up results from the output databases (as pandas dataframes)
-df_null, df_null_obs = lee.load_results(lee.null_table,['neg2logL'],get_observed=True)
-df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['neg2logL_quad','logw'],get_observed=True)
+df_null, df_null_obs = lee.load_results(lee.null_table,['log_prob'],get_observed=True)
+df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
 
 # Compute likelihood ratios
-LLR = df_null['neg2logL'] - df_prof['neg2logL_quad']
+LLR = -2*(df_null['log_prob'] - df_prof['log_prob_quad'])
+print("LLR:", LLR)
 
 # Plot TS distribution 
 fig = plt.figure(figsize=(5,3))

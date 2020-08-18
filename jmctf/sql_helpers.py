@@ -51,6 +51,16 @@ def upsert(cursor,table_name,df,primary):
 def upsert_if_smaller(cursor,table_name,df,primary):
     """As sql_upsert, but only replaces existing data if new values are smaller than those already recorded.
     """
+    return upsert_if(cursor,table_name,df,primary,"<")
+ 
+def upsert_if_larger(cursor,table_name,df,primary):
+    """As sql_upsert, but only replaces existing data if new values are larger than those already recorded.
+    """
+    return upsert_if(cursor,table_name,df,primary,">")
+  
+def upsert_if(cursor,table_name,df,primary,op):
+    """Common function for upsert_if_smaller/larger
+    """
     rec = df.to_records()
     #print("rec:",rec)
     columns = df.to_records().dtype.names  
@@ -68,7 +78,7 @@ def upsert_if_smaller(cursor,table_name,df,primary):
         for j,col in enumerate(columns):
             if col is not primary:
                 command += "`{0}` = CASE".format(col)
-                command += "      WHEN `{0}`<excluded.`{0}` THEN `{0}`".format(col)
+                command += "      WHEN `{0}`{1}excluded.`{0}` THEN `{0}`".format(col,op)
                 command += "      ELSE excluded.`{0}`".format(col)
                 command += "      END"
                 if j<len(columns)-1: command += ","
