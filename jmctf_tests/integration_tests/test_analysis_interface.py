@@ -3,7 +3,7 @@
    required interface"""
 
 import pytest
-
+import numpy as np
 from tensorflow_probability import distributions as tfd
 from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists
@@ -113,7 +113,7 @@ def test_JointDistribution_output_shapes_single(joint,samples,log_prob_shape):
 
     # Will only see these print statements when test fails
     print("x:", x)
-    print("p:", p)
+    print("log_prob:", log_prob)
     print("log_prob_shape:", log_prob_shape)
     assert log_prob.shape == log_prob_shape
 
@@ -134,3 +134,47 @@ def test_fit_nuisance(joint,samples,parameters,log_prob_shape):
     print("par_dict:", par_dict)
     assert log_prob.shape == log_prob_shape
 
+def test_fit_all_numeric(joint,samples):
+    """Ensure that exact MLE fits match numerical results"""
+    log_prob, joint_fitted, par_dict = joint.fit_all(samples)
+    print("samples:", samples)
+    print("log_prob:", log_prob)
+    print("par_dict:", par_dict)
+    log_prob_n, joint_fitted_n, par_dict_n = joint.fit_all(samples,force_numeric=True)
+    print("log_prob_n:", log_prob_n)
+    print("par_dict_n:", par_dict_n)
+    tol = 1e-3
+    print("tol = ", tol)
+    assert np.all(np.abs(log_prob - log_prob_n)<tol)
+    for ka,a in par_dict['all'].items():
+        for kp,p in a.items():
+            print("Testing par {0} of analysis {1}".format(kp,ka))
+            print("p - par_dict_n['all'][ka][kp] :",p - par_dict_n['all'][ka][kp])
+            if np.all(p==0): 
+                assert np.all((p - par_dict_n['all'][ka][kp]) < tol)
+            else: 
+                print("np.abs((p - par_dict_n['all'][ka][kp])/p :", np.abs((p - par_dict_n['all'][ka][kp])/p))
+                assert np.all(np.abs((p - par_dict_n['all'][ka][kp])/p)<tol) 
+
+def test_fit_nuisance_numeric(joint,samples,parameters):
+    """Ensure that exact MLE fits match numerical results"""
+    log_prob, joint_fitted, par_dict = joint.fit_nuisance(samples,parameters)
+    print("samples:", samples)
+    print("parameters:", parameters)
+    print("log_prob:", log_prob)
+    print("par_dict:", par_dict)
+    log_prob_n, joint_fitted_n, par_dict_n = joint.fit_nuisance(samples,parameters,force_numeric=True)
+    print("log_prob_n:", log_prob_n)
+    print("par_dict_n:", par_dict_n)
+    tol = 1e-3
+    print("tol = ", tol)
+    assert np.all(np.abs(log_prob - log_prob_n)<tol)
+    for ka,a in par_dict['all'].items():
+        for kp,p in a.items():
+            print("Testing par {0} of analysis {1}".format(kp,ka))
+            print("p - par_dict_n['all'][ka][kp] :",p - par_dict_n['all'][ka][kp])
+            if np.all(p==0): 
+                assert np.all((p - par_dict_n['all'][ka][kp]) < tol)
+            else: 
+                print("np.abs((p - par_dict_n['all'][ka][kp])/p :", np.abs((p - par_dict_n['all'][ka][kp])/p))
+                assert np.all(np.abs((p - par_dict_n['all'][ka][kp])/p)<tol) 

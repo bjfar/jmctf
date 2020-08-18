@@ -104,7 +104,7 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     total_loss = tf.math.reduce_sum(q)
     return total_loss, q, None, None
 
-def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False):
+def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False,force_numerical=False):
     """Wrapper for optimizer step that skips it if the initial guesses are known
        to be exact MLEs"""
     opts = {"optimizer": "Adam",
@@ -145,9 +145,12 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         msg = "NaNs detected in input parameter arrays for 'optimize' function! Parameter arrays containing NaNs were:{0}".format(nanpar)
         raise ValueError(msg)
 
-    all_exact_MLEs = True
-    for a in analyses.values():
-        if not a.exact_MLEs: all_exact_MLEs = False
+    if force_numerical:
+        all_exact_MLEs = False
+    else:
+        all_exact_MLEs = True
+        for a in analyses.values():
+            if not a.exact_MLEs: all_exact_MLEs = False
 
     if all_exact_MLEs:
         if verbose: print("All starting MLE guesses are exact: skipping optimisation") 
@@ -462,16 +465,18 @@ class JointDistribution(tfd.JointDistributionNamed):
         nuis  = {a.name: a.nuisance_parameter_shapes() for a in self.analyses.values()} 
         return interest, fixed, nuis
 
-    def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False):
+    def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False,force_numeric=False):
         """Fit nuisance parameters to samples for a fixed signal
-           (ignores parameters that were used to construct this object)"""
+           (ignores parameters that were used to construct this object).
+           If force_numeric is True then asserted 'exactness' of starting guesses
+           is ignored and numerical optimisation is run regardless."""
         fp = c.convert_to_TF_constants(fixed_pars)
         all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
 
         # Note, parameters obtained from get_nuis_parameters, and passed to
         # the 'optimize' function, are SCALED. All of them, regardless of whether
         # they actually vary in this instance.
-        joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
+        joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose,force_numerical=force_numeric)
 
         # Make sure to de-scale parameters before returning them to users!
         # Also it is nice to pack up the various parameter splits into a dictionary
@@ -506,7 +511,7 @@ class JointDistribution(tfd.JointDistributionNamed):
     #    joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
     #    return q, joint_fitted, pars
   
-    def fit_all(self,samples,fixed_pars={},log_tag='',verbose=False):
+    def fit_all(self,samples,fixed_pars={},log_tag='',verbose=False,force_numeric=False):
         """Fit all signal and nuisance parameters to samples
            (ignores parameters that were used to construct this object)
            Some special parameters within analyses are also flagged as
@@ -515,6 +520,8 @@ class JointDistribution(tfd.JointDistributionNamed):
            but they can be supplied via the "fixed_pars" dict. These
            parameters are always treated as fixed, when it comes to
            starting MLE guesses etc.
+           If force_numeric is True then asserted 'exactness' of starting guesses
+           is ignored and numerical optimisation is run regardless.
         """
         # Make sure the samples are TensorFlow objects of the right type:
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
@@ -524,7 +531,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # Note, parameters obtained from get_all_parameters, and passed to
         # the 'optimize' function, are SCALED. All of them, regardless of whether
         # they actually vary in this instance.
-        joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose)
+        joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose,force_numerical=force_numeric)
 
         # Make sure to de-scale parameters before returning them to users!
         # Also it is nice to pack up the various parameter splits into a dictionary
