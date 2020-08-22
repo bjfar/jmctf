@@ -170,11 +170,30 @@ def test_fit_nuisance_numeric(joint,samples,parameters):
     print("tol = ", tol)
     assert np.all(np.abs(log_prob - log_prob_n)<tol)
     for ka,a in par_dict['all'].items():
-        for kp,p in a.items():
+        for kp,p_in in a.items():
+            p = p_in.numpy()
+            p_n = par_dict_n['all'][ka][kp].numpy()
             print("Testing par {0} of analysis {1}".format(kp,ka))
-            print("p - par_dict_n['all'][ka][kp] :",p - par_dict_n['all'][ka][kp])
-            if np.all(p==0): 
-                assert np.all((p - par_dict_n['all'][ka][kp]) < tol)
-            else: 
-                print("np.abs((p - par_dict_n['all'][ka][kp])/p :", np.abs((p - par_dict_n['all'][ka][kp])/p))
-                assert np.all(np.abs((p - par_dict_n['all'][ka][kp])/p)<tol) 
+            print("p:", p)
+            print("p_n:", p_n)
+            print("p - p_n :",p - p_n)
+            # Need to deal with cases where p==0 differently due to divide by zero.
+            # Kind of hard to test actually since reasonable scaling is hard to detect. TODO: might need to revisit this.
+            m0 = p==0
+            print("m0:",m0)
+            diff = np.abs(p - p_n)
+            print("diff:", diff)
+            if p.shape==():
+                # Scalar cases, cannot use mask
+                if m0: 
+                    print("np.all(diff < tol):",np.all(diff < tol))
+                    assert np.all(diff < tol)
+                else:  
+                    print("np.all(diff/|p| < tol):",np.all(diff/np.abs(p) < tol))
+                    assert np.all(diff/np.abs(p) < tol)
+            else:
+                # Array cases
+                print("np.all(diff[m0] < tol):",np.all(diff[m0] < tol))
+                print("np.all(diff[~m0]/|p[~m0]|) < tol):",np.all(diff[~m0]/np.abs(p[~m0]) < tol))
+                assert np.all(diff[m0] < tol)
+                assert np.all(diff[~m0]/np.abs(p[~m0]) < tol) 
