@@ -166,7 +166,7 @@ def test_fit_nuisance_numeric(joint,samples,parameters):
     log_prob_n, joint_fitted_n, par_dict_n = joint.fit_nuisance(samples,parameters,force_numeric=True)
     print("log_prob_n:", log_prob_n)
     print("par_dict_n:", par_dict_n)
-    tol = 1e-3
+    tol = 1e-6
     print("tol = ", tol)
     assert np.all(np.abs(log_prob - log_prob_n)<tol)
     for ka,a in par_dict['all'].items():

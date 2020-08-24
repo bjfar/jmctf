@@ -11,14 +11,14 @@ from collections.abc import Mapping
 # Reference dtype for consistency in TensorFlow operations
 TFdtype = np.float32
 
-# Smallest positive 32-bit float
-nearlyzero32 = np.nextafter(0,1,dtype=TFdtype)
+# Smallest positive float of the same type as TFdtype
+nearlyzero = np.nextafter(0,1,dtype=TFdtype)
 
-# A constant "close" to nearlyzero32, but large enough to avoid divide-by-zero
+# A constant "close" to nearlyzero, but large enough to avoid divide-by-zero
 # nans, and similar floating point problems, in all parts of JMCTF
 # (but still small enough to avoid observable errors in results)
 # TODO: Make sure this is sufficiently robust
-reallysmall = 1e10*nearlyzero32
+reallysmall = 1e10*nearlyzero
 
 # Stuff to help format YAML output
 class blockseqtrue( list ): pass
@@ -437,6 +437,22 @@ def deep_broadcast(d,shape):
     """Apply tf.broadcast to all bottom-level objects in nested dictionaries"""
     return tf.broadcast_to(d,shape)
 
+def tf_all_equal(a,b,tol=0):
+    return tf.reduce_all(tf.less_equal(tf.abs(a-b),tol))
+
+def deep_all_equal(a,b):
+    """Check that for every item in a, there is a matching item in b in that can be considered equal
+       (in a nested sense). TODO: currently doesn't check for extra stuff that might be in b"""
+    if isinstance(a, Mapping):
+        equal = True 
+        for k,v in a.items():
+            equal = deep_all_equal(v,b[k])
+            if not equal: break
+    else:
+        equal = tf_all_equal(a,b)
+    return equal
+
+# TODO: do I use this? It's a bit of a strange thing to do.
 def deep_equals(d,val=None):
     """Return True (and the value) if all bottom-level objects in nested dictionaries are equal"""
     if isinstance(d, Mapping):

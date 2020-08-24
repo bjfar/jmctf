@@ -46,21 +46,27 @@ def timed_execution():
   print('Evaluation took: %f seconds' % dt)
 #=================
 
+def combine_pars(pars1,pars2=None):
+    """Combine parameter dictionaries, with first argument taking precedence"""
+    if pars2 is None:
+        all_pars = pars1
+    else:
+        all_pars = c.deep_merge(pars2,pars1) # Second argument takes precendence in deep_merge
+    return all_pars
+
 def neg2logL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise
        TODO: parameter 'transform' feature not currently in use, probably doesn't work correctly
     """
     #print("In neg2logL:")
+    print("In neg2logL: pars (scaled) = ", pars)
     #print("pars:", c.print_with_id(pars,id_only))
     #print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
         pars_t = transform(pars)
     else:
         pars_t = pars
-    if const_pars is None:
-        all_pars = pars_t
-    else:
-        all_pars = c.deep_merge(const_pars,pars_t)
+    all_pars = combine_pars(pars_t, const_pars)
 
     #tf.print("pars:", pars)
     #tf.print("all_pars:", all_pars)
@@ -87,6 +93,8 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     # avoid applying the scaling a second time.
     joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True,in_tf_function=True)
     q = -2*joint.log_prob(data)
+    #print("in neg2logL: all_pars = ", joint.descale_pars(all_pars))
+    #print("in neg2logL: joint.get_pars() = ",joint.get_pars())
     #print("q:", q)
     #print("all_pars:", all_pars)
     #print("logL parts:", joint.log_prob_parts(data))
@@ -102,7 +110,7 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     #     msg = "NaNs detect in result of neg2logL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable! Components of the joint distribution whose log_prob contained nans were:" + nan_components
     #     raise ValueError(msg)
     total_loss = tf.math.reduce_sum(q)
-    return total_loss, q, None, None
+    return total_loss, q, joint.descale_pars(all_pars), None
 
 def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False,force_numerical=False):
     """Wrapper for optimizer step that skips it if the initial guesses are known
@@ -154,7 +162,8 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
 
     if all_exact_MLEs:
         if verbose: print("All starting MLE guesses are exact: skipping optimisation") 
-        total_loss, q, none, none = neg2logL(free_pars,const_pars,**kwargs)
+        total_loss, q, final_pars, null = neg2logL(free_pars,const_pars,**kwargs)
+        #print("Finished using exact MLEs: final_pars = ", final_pars)
     else:
         # For analyses that have exact MLEs, we want to move those parameters from the
         # "free" category into the "fixed" category.
@@ -181,7 +190,8 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         f = mm.tools.func_partial(neg2logL,**kwargs)
         #print("About to enter optimizer")
         #print("pars:", c.print_with_id(reduced_free_pars,False))
-        q, none, none = mm.optimize(reduced_free_pars, f, **opts)
+        q, final_pars, null = mm.optimize(reduced_free_pars, f, **opts)
+        #print("Finished mm.optimize: final_pars = ", final_pars)
         # ------------------
 
         # # Optimization with tfp optimizers
@@ -215,15 +225,19 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
         # # --------------------
 
     # Rebuild distribution object with fitted parameters for output to user
-    if transform is not None:
-        pars_t = transform(free_pars)
-    else:
-        pars_t = free_pars
-    if const_pars is None:
-        all_pars = pars_t
-    else:
-        all_pars = c.deep_merge(const_pars,pars_t)
-    joint = JointDistribution(analyses.values(),all_pars,pre_scaled_pars=True)
+    joint = JointDistribution(analyses.values(),final_pars)
+
+    # Split parameters back into fitted vs const parameters
+    # (as the user saw them; i.e. undoing the "reduced" free pars stuff in exact MLE case)
+    # 'const' parameters can occur by default, so the "free" parameters take precedence when clashes exist
+    final_free_pars = {ak: {p: final_pars[ak][p] for p in av.keys()} for ak,av in pars.items()}
+    final_const_pars = {ak: {p: final_pars[ak][p] for p in av.keys() if p not in pars.get(ak,{}).keys()} for ak,av in const_pars.items()}
+ 
+    #print("final_pars:", final_pars)
+    #print("pars:", pars)
+    #print("final_free_pars:", final_free_pars)
+    #print("const_pars:", const_pars)
+    #print("final_const_pars:", final_const_pars)
 
     # Output is:
     #  JointDistribution with parameters set to the MLEs,
@@ -231,7 +245,7 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
     #  Full parameter dictionary used to construct the fitted JointDistribution
     #  parameter dictionary containing only the fitted free parameters
     #  parameter dictionary containing only the fixed ("bystander") parameters
-    return joint, q, all_pars, pars_t, const_pars
+    return joint, q, final_pars, final_free_pars, final_const_pars
 
 class JointDistribution(tfd.JointDistributionNamed):
     """Object to combine analyses together and treat them as a single
@@ -402,6 +416,10 @@ class JointDistribution(tfd.JointDistributionNamed):
             descaled_pars[a.name] = a.descale_pars(pars[a.name])
         return descaled_pars
 
+    def get_pars(self):
+        """Return all the parameters of the distribution, in "physical" scaling."""
+        return self.descale_pars(self.pars)
+
     def scale_pars(self,pars):
         """Apply scaling to all parameters. Assume none of them have had scaling applied yet."""
         scaled_pars = {}
@@ -478,12 +496,12 @@ class JointDistribution(tfd.JointDistributionNamed):
         # they actually vary in this instance.
         joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_nuis_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose,force_numerical=force_numeric)
 
-        # Make sure to de-scale parameters before returning them to users!
+        # Fitted/final parameters are returned de-scaled
         # Also it is nice to pack up the various parameter splits into a dictionary
         par_dict = {}
-        par_dict["all"] = self.descale_pars(all_pars)
-        par_dict["fitted"] = self.descale_pars(fitted_pars)
-        par_dict["fixed"]  = self.descale_pars(const_pars)
+        par_dict["all"]    = all_pars
+        par_dict["fitted"] = fitted_pars
+        par_dict["fixed"]  = const_pars
         return -0.5*q, joint_fitted, par_dict 
 
 
@@ -533,12 +551,12 @@ class JointDistribution(tfd.JointDistributionNamed):
         # they actually vary in this instance.
         joint_fitted, q, all_pars, fitted_pars, const_pars = optimize(all_free_pars,all_fixed_pars,self.analyses,samples,log_tag=log_tag,verbose=verbose,force_numerical=force_numeric)
 
-        # Make sure to de-scale parameters before returning them to users!
+        # Fitted/final parameters are returned de-scaled
         # Also it is nice to pack up the various parameter splits into a dictionary
         par_dict = {}
-        par_dict["all"] = self.descale_pars(all_pars)
-        par_dict["fitted"] = self.descale_pars(fitted_pars)
-        par_dict["fixed"]  = self.descale_pars(const_pars)
+        par_dict["all"]    = all_pars
+        par_dict["fitted"] = fitted_pars
+        par_dict["fixed"]  = const_pars
         return -0.5*q, joint_fitted, par_dict 
 
     def Hessian(self,samples):
@@ -566,7 +584,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("Hessian: batch_shape:", batch_shape)
 
         # Make sure to use non-scaled parameters to get correct gradients etc.
-        pars = self.descale_pars(self.pars)
+        pars = self.get_pars()
 
         # Separate "const" parameters
         free_pars = {}
@@ -730,7 +748,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         H, g = self.Hessian(samples)
         #print("H:", H)
         #print("g:", g) # Should be close to zero if fits worked correctly
-        pars = self.descale_pars(self.pars) # This is what Hessian uses internally
+        pars = self.get_pars() # This is what Hessian uses internally
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
         #print("descaled_pars:", pars)
@@ -754,22 +772,34 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("...done!")
         #print("A:", A)
         #print("B:", B)
-        return A, B, interest_p, nuisance_p
+        kwargs = {"A":A, "B":B, "interest":interest_p, "nuisance":nuisance_p}
+        return kwargs
 
-    def quad_loglike_f(self,samples):
+    def log_prob_quad_f(self,samples):
         """Return a function that can be used to compute the profile log-likelihood
-           for fixed signal parametes, for many signal hypotheses, using a 
+           for fixed signal parameters, for many different signal hypotheses, using a 
            second-order Taylor expandion of the likelihood surface about a point to
            determine the profiled nuisance parameter values. 
-           Should be used after pars are fitted to the global best fit for best
-           expansion."""
+           Should be used after pars are fitted to the desired expansion point, e.g.
+           global best fit, or perhaps a null hypothesis point"""
         #print("quad_loglike_f; samples:", samples)
-        A, B, interest_p, nuisance_p = self.quad_loglike_prep(samples)
-        f = mm.tools.func_partial(self.neg2loglike_quad,A=A,B=B,interest=interest_p,nuisance=nuisance_p,samples=samples)
+        prep_kwargs = self.quad_loglike_prep(samples)
+        f = mm.tools.func_partial(self._log_prob_quad,samples=samples,**prep_kwargs)
         return f
 
-    def neg2loglike_quad(self,signal,A,B,interest,nuisance,samples):
-        """Compute -2*loglikelihood using pre-computed Taylor expansion
+    def nuisance_quad_f(self,samples):
+        """Return a function that can be used to compute profiled (i.e. fitted, MLE) nuisance
+           parameters for fixed signal parameters, for many different signal hypotheses, using a 
+           second-order Taylor expandion of the likelihood surface about a point to
+           determine the profiled nuisance parameter values. 
+           Should be used after pars are fitted to the desired expansion point, e.g.
+           global best fit, or perhaps a null hypothesis point"""
+        prep_kwargs = self.quad_loglike_prep(samples)
+        f = mm.tools.func_partial(self._nuisance_quad,samples=samples,**prep_kwargs)
+        return f
+
+    def _nuisance_quad(self,signal,samples,A,B,interest,nuisance):
+        """Compute nuisance parameter MLEs using pre-computed Taylor expansion
            parameters (for many samples) for a set of signal hypotheses"""
 
         # Make sure format of signal parameters matches the known "interest" parameters
@@ -789,13 +819,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         parlist = c.convert_to_TF_variables(parlist_init)
 
         if A is None or B is None:
-            # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
-            # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
-            # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
-            # is missing when there are no nuisance parameters, so we need to add it.
-            expanded_pars = c.deep_expand_dims(c.convert_to_TF_variables(signal),axis=0)
-            # Compute -2*log_prob
-            joint = JointDistribution(self.analyses.values(),expanded_pars)
+            # No nuisance parameters exist for this analysis! So no expansion to be done. 
+            theta_prof_dict = None
         else:
             par_shapes = self.parameter_shapes()
             s, s_bshape, s_names = c.cat_pars_to_tensor(parlist,par_shapes) 
@@ -826,11 +851,27 @@ class JointDistribution(tfd.JointDistributionNamed):
 
             # de-stack analytically profiled nuisance parameters
             theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 
-            
+        return theta_prof_dict
+ 
+    def _log_prob_quad(self,signal,samples,**kwargs):
+        """Compute loglikelihood using pre-computed Taylor expansion
+           parameters (for many samples) for a set of signal hypotheses"""
+
+        # Get the profiled nuisance parameters under the Taylor expansion.
+        theta_prof_dict = self._nuisance_quad(signal,samples,**kwargs)
+
+        if theta_prof_dict is None:
+            # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
+            # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
+            # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
+            # is missing when there are no nuisance parameters, so we need to add it.
+            expanded_pars = c.deep_expand_dims(c.convert_to_TF_variables(signal),axis=0)
             # Compute -2*log_prob
-            #print("theta_prof_dict:", theta_prof_dict)
-            #print("signal:", signal)
+            joint = JointDistribution(self.analyses.values(),expanded_pars)
+        else:
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
+
+        batch_shape = self.bcast_batch_shape_tensor()
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
         # This is a little confusing, but basically need to make the sample_shape+batch_shape for the sample
@@ -842,19 +883,19 @@ class JointDistribution(tfd.JointDistributionNamed):
             raise ValueError(msg)
         event_shape = joint.event_shape_tensor()
         s_batch_shape = c.sample_batch_shape(samples,event_shape)
-        if s_batch_shape==() and (A is None or B is None) : s_batch_shape = [0] # Interpret as one batch dim when zero. This is a little hacky, I probably need to tighten up the shape propagation.
+        if s_batch_shape==() and (theta_prof_dict is None) : s_batch_shape = [0] # Interpret as one batch dim when zero. This is a little hacky, I probably need to tighten up the shape propagation.
         n_new_dims = len(batch_shape) - len(s_batch_shape)
         matched_samples = samples
         for i in range(n_new_dims):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
-        q = -2*joint.log_prob(matched_samples)
+        log_prob = joint.log_prob(matched_samples)
         #print("batch_shape:", batch_shape)
         #print("s_batch_shape:", s_batch_shape)
         #print("n_new_dims:", n_new_dims)
         #print("samples:", samples)
         #print("matched_samples:", matched_samples)
         #print("q:", q)
-        return q #c.squeeze_to(q,2,dont_squeeze=[0])
+        return log_prob #c.squeeze_to(q,2,dont_squeeze=[0])
 
     def bcast_batch_shape_tensor(self):
         """The built-in batch_shape_tensor method for NamedJointDistribution in
