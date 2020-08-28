@@ -196,4 +196,7 @@ def test_fit_nuisance_numeric(joint,samples,parameters):
                 print("np.all(diff[m0] < tol):",np.all(diff[m0] < tol))
                 print("np.all(diff[~m0]/|p[~m0]|) < tol):",np.all(diff[~m0]/np.abs(p[~m0]) < tol))
                 assert np.all(diff[m0] < tol)
-                assert np.all(diff[~m0]/np.abs(p[~m0]) < tol) 
+                assert np.all(diff[~m0]/np.abs(p[~m0]) < tol)
+ 
+
+ 

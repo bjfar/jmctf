@@ -8,7 +8,7 @@ from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists
 
 # Number of samples to draw during tests
-N = 5 # Needs to match number of hypotheses for Hessian calculation (in reality would use parameters fit to each sample)
+N = 1000
 
 # Hessian test shape outputs
 Hessians_shape = {
@@ -226,7 +226,16 @@ def test_fitted_pars(joint_fitted_nuisance,fitted_pars):
     assert c.deep_all_equal(fitted_pars['all'], joint_fitted_nuisance.get_pars())
 
 def test_quad_logl_nuisance(joint_fitted_nuisance,fitted_pars,quad_prep,samples):
-    """Check that quad-estimate nuisance parameters match fitted ones at the expansion point"""
+    """Check that quad-estimate nuisance parameters match fitted ones at the expansion point.
+    
+       NOTE: As it turns out, values may not exactly match. This is because when fits are
+       done numerically they will not find the exact log_prob maxima. Therefore, when expanding
+       analytically and profiling around this point, the expansion will quite likely find a 
+       slightly *better* log_prob point, with slightly different nuisance parameter values.
+       It is kind of hard to know exactly what is tolerable here; the tolerance on the log_prob
+       difference (in test_quad_logl) is more informative, in general.
+       Here we just have to set a quite loose tolerance to account for this possibility
+    """
     signal = fitted_pars["fixed"]
     quad_nuis_pars = joint_fitted_nuisance._nuisance_quad(signal,samples,**quad_prep)
     nuis_pars = fitted_pars["fitted"]
@@ -236,11 +245,19 @@ def test_quad_logl_nuisance(joint_fitted_nuisance,fitted_pars,quad_prep,samples)
     if quad_prep["A"] is None:
         assert quad_nuis_pars is None
     else:
-        assert c.deep_all_equal(quad_nuis_pars,nuis_pars)
+        tol = 1e-3
+        assert c.deep_all_equal_frac_tol(quad_nuis_pars,nuis_pars,frac_tol=0.05,fallback_tol=tol)
 
 def test_quad_logl(joint_fitted_nuisance,fitted_log_prob,fitted_pars,quad_prep,samples):
     """Check that shapes for log_prob_quad calculation make sense, and that values match
-       the true log_prob at the expansion point"""
+       the true log_prob at the expansion point
+       
+       NOTE: As it turns out, values may not exactly match. This is because when fits are
+       done numerically they will not find the exact log_prob maxima. Therefore, when expanding
+       analytically and profiling around this point, the expansion will quite likely find a 
+       slightly *better* log_prob point. We therefore need some extra tolerance to allow for
+       this, but only in one direction. Should never get a *worse* result from the expansion,
+       unless the likelihood function is absurdly non-quadratic even very close to the maxima."""
     #A, B, interest, nuisance = quad_prep
     #q = joint_fitted_nuisance.neg2loglike_quad(internal_pars,A,B,interest,nuisance,samples)
 
@@ -264,7 +281,12 @@ def test_quad_logl(joint_fitted_nuisance,fitted_log_prob,fitted_pars,quad_prep,s
     # have only calculated it at the expansion points, so all values should be equal
     print("log_prob_quad:", log_prob_quad)
     print("fitted_log_prob:", fitted_log_prob)
-    assert c.tf_all_equal(log_prob_quad, fitted_log_prob)
+    print("log_prob_quad - fitted_log_prob:", log_prob_quad - fitted_log_prob)
+    #assert c.tf_all_equal(log_prob_quad, fitted_log_prob)
+    tol_tight = 1e-6
+    tol_loose = 1e-3
+    assert tf.reduce_all(tf.less_equal(log_prob_quad - fitted_log_prob,tol_loose)) # Looser tolerance for log_prob_quad > fitted_log_prob
+    assert tf.reduce_all(tf.less_equal(-(log_prob_quad - fitted_log_prob),tol_tight)) # Tighter tolerance for log_prob_quad < fitted_log_prob; should only be possible via floating point error
 
 # @pytest.mark.parametrize(
 #     "analysis,single_hypothesis,hypothesis_list,Hessian_list",

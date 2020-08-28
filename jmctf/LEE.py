@@ -50,13 +50,15 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
     # Evaluate distributions for Asimov datasets, in case where we
     # know that the MLEs for those samples are the true parameters
     qsbAsb = -2*(joint0s.log_prob(samplesAsb))
-    qbAb  = -2*(joint0.log_prob(samplesAb))
+    qbAb   = -2*(joint0.log_prob(samplesAb))
     
     # Fit distributions for Asimov datasets for the other half of each
     # likelihood ratio
     print("Fitting w.r.t Asimov samples")
-    qbAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, nosignal, log_tag='bAsb')
-    qsbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, signal, log_tag='sbAsb')
+    log_prob_bAsb, joint_fitted, pars = joint.fit_nuisance(samplesAsb, nosignal, log_tag='bAsb')
+    log_prob_sbAb, joint_fitted, pars = joint.fit_nuisance(samplesAb, signal, log_tag='sbAsb')
+    qbAsb = -2*log_prob_bAsb
+    qsbAb = -2*log_prob_sbAb
   
     qAsb = (qsbAsb - qbAsb)[0] # extract single sample result
     qAb = (qsbAb - qbAb)[0]
@@ -70,18 +72,23 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
    
     if fitall:
         print("Fitting GOF w.r.t background-only samples")
-        qgof_b, joint_gof_fitted_b, gof_pars_b  = joint.fit_all(samples0, log_tag='gof_all_b')
+        log_prob_gof_b, joint_gof_fitted_b, gof_pars_b  = joint.fit_all(samples0, log_tag='gof_all_b')
+        qgof_b = -2*log_prob_gof_b
         #print("Fitting GOF w.r.t signal samples")
-        #qgof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
+        #log_prob_gof_sb, joint_gof_fitted_sb ,gof_pars_sb  = joint.fit_all(samples0s, log_tag='gof_all_sb')
+        qgof_sb = -2*log_prob_gof_sb
 
         print("Fitting w.r.t background-only samples")
-        qb , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
-        qsb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(samples0, signal, log_tag='qsb')
+        log_prob_b , joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
+        log_prob_sb, joint_fitted_sb, nuis_pars_s = joint.fit_nuisance(samples0, signal, log_tag='qsb')
+        qb  = -2*log_prob_b
+        qsb = -2*log_prob_sb
         q = qsb - qb # mu=0 distribution
     else:
         # Only need the no-signal nuisance parameter fits for quadratic approximations
         print("Fitting no-signal nuisance parameters w.r.t background-only samples")
-        qb, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
+        log_prob_b, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(samples0, nosignal, log_tag='qb')
+        qb = -2*log_prob_b
 
         # Do one full GOF fit just to determine parameter numbers 
         null, null, gof_pars_b  = joint.fit_all(onesample0)
@@ -90,10 +97,10 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
     # with nuisance parameters analytically profiled out using a second order Taylor expansion
     # about the GOF best fit points.
     #print("fitted pars:", gof_pars_b)
-    #f1 = joint_gof_fitted_b.quad_loglike_f(samples0)
+    #f1 = joint_gof_fitted_b.log_prob_quad_f(samples0)
 
     # What if we expand about the no-signal point instead? Just to see...
-    f2 = joint_fitted_b.quad_loglike_f(samples0)
+    f2 = joint_fitted_b.log_prob_quad_f(samples0)
     # Huh, seems to work way better. I guess it should be better when the test signals are small?
 
     # Can we combine the two? Weight be inverse square euclidean distance in GOF parameter space?
@@ -117,16 +124,18 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
         w = w1+w2
         return (w1/w)*f1(signal) + (w2/w)*f2(signal)
 
-    qsb_quad = f2(signal)
-    #qsb_quad = combf(signal)
-    #qb_quad = f2(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
+    qsb_quad = -2*f2(signal)
+    #qsb_quad = -2*combf(signal)
+    #qb_quad = -2*f2(nosignal) # Only one of these so can easily do it numerically, but might be more consistent to use same approx. for both.
     #print("qsb_quad:", qsb_quad)
     #q_quad = qsb_quad - qb_quad
     q_quad = qsb_quad - qb # Using quad approx only for signal half. Biased, but maybe better p-value behaviour.
 
     # print("Fitting w.r.t signal samples")
-    # qb_s , joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, nosignal)
-    # qsb_s, joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, signal)
+    # log_prob_b_s , joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, nosignal)
+    # log_prob_sb_s, joint_fitted, nuis_pars = joint.fit_nuisance(samples0s, signal)
+    # qb_s  = -2*log_prob_b_s
+    # qsb_s = -2*log_prob_sb_s 
     # q_s = qsb_s - qb_s #mu=1 distribution
 
     print("Determining all local p-value distributions...")
@@ -192,12 +201,15 @@ def LEEcorrection(analyses,signal,nosignal,name,N,fitall=True):
 
     # Fit distributions for observed datasets
     print("Fitting w.r.t observed data")
-    qbO , joint_fitted, pars = joint.fit_nuisance(obs_data, nosignal)
-    qsbO, joint_fitted, pars = joint.fit_nuisance(obs_data, signal)
+    log_prob_bO , joint_fitted, pars = joint.fit_nuisance(obs_data, nosignal)
+    log_prob_sbO, joint_fitted, pars = joint.fit_nuisance(obs_data, signal)
+    qbO  = -2*log_prob_bO
+    qsbO = -2*log_prob_sbO 
     qO = (qsbO - qbO)[0] # extract single sample result
 
     print("Fitting GOF w.r.t observed data")
-    qgof_obs, joint_fitted, pars  = joint.fit_all(obs_data, log_tag='gof_obs')
+    log_prob_gof_obs, joint_fitted, pars  = joint.fit_all(obs_data, log_tag='gof_obs')
+    qgof_obs = -2*log_prob_gof_obs
     qgofOb  = qbO - qgof_obs
     qgofOsb = qsbO - qgof_obs
     
@@ -419,7 +431,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         """Perform nuisance parameter fits of null hypothesis for all events where it hasn't already been done"""
         self.process_alternate_local() # Special case of local alternate hypothesis processing for the null hypothesis case.
 
-    def process_alternate_local(self,alt_hyp=None,name=None):
+    def process_alternate_local(self,alt_hyp=None,name=None,do_quad=True,event_batch_size=10000):
         """Perform nuisance parameter fits of single null/alternate hypotheses for all events where it hasn't already been done"""
         for a in self.LEEanalyses.values():
             if alt_hyp is None:
@@ -428,13 +440,13 @@ class LEECorrectorMaster(LEECorrectorBase):
                 raise ValueError("Name for alternate hypothesis needs to be provided, for identifying it in the results database!")
             else:
                 a.process_alternate_local(alt_hyp,name)
-   
+ 
         # Fits completed; extract all results and get combined log_prob values
         comb = None
         for a in self.LEEanalyses.values():
             if alt_hyp is None: table = a.local_table+a.nullname
             else: table = a.local_table+name
-            df = a.load_results(table,['EventID','log_prob'])
+            df = a.load_results(table,['EventID','log_prob','log_prob_quad'])
             #print("df:",df)
             if comb is None: 
                 comb = df
@@ -444,14 +456,14 @@ class LEECorrectorMaster(LEECorrectorBase):
         cur = conn.cursor()
         if alt_hyp is None: table = self.null_table
         else: table = self.local_table+name
-        sql.create_table(cur,table,[('EventID','integer primary key'),('log_prob','real')])
+        sql.create_table(cur,table,[('EventID','integer primary key'),('log_prob','real'),('log_prob_quad','real')])
         sql.upsert(cur,table,comb,'EventID')
         self.close_db(conn)
 
         # Do the same for asymptotic/Asimov and observed values (non-null case only)
         if alt_hyp is not None:
             comb = None
-            cols = ['qAsb','qAb','qO','neg2logL','neg2logL_quad']
+            cols = ['qAsb','qAb','qO','log_prob']
             for a in self.LEEanalyses.values():
                 table = a.local_table+name+"_observed"
                 df = a.load_results(table,cols)
@@ -469,7 +481,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         else:
             # Else just add the observed value for the null hypothesis likelihood
             comb = None
-            cols = ['log_prob'] # We never use the quad approximation for the null likelihood, since this is the point we expand around.
+            cols = ['log_prob'] 
             for a in self.LEEanalyses.values():
                 table = a.local_table+a.nullname+"_observed"
                 df = a.load_results(table,cols)
@@ -485,24 +497,15 @@ class LEECorrectorMaster(LEECorrectorBase):
             sql.upsert(cur,self.null_table+'_observed',comb,primary='EventID')
             self.close_db(conn)
 
+    def _get_quads(self,EventIDs):
+        """Get quadratic approximations to likelihood surfaces for the given EventIDs
+           (using the null hypothesis (with fitted nuisance parameters) as the expansion point)"""
+        quads = {name: a._get_quad(EventIDs) for name,a in self.LEEanalyses.items()}
+        return quads
 
     def _process_alternate_batch(self,alt_hyp_gen,EventIDs,dbtype):
         """For internal use in 'process_alternate' function. Processes a single batch of events."""
-        quads = []
-
-        if isinstance(EventIDs, str) and EventIDs=='observed':
-            observed_mode = True
-        else:
-            observed_mode = False
-            EventIDs = EventIDs.numpy()
-
-        for name,a in self.LEEanalyses.items():
-            pars = a.load_null_nuis_pars(EventIDs)
-            if pars is None:
-                raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all null hypothesis fits been done?")
-            events = c.add_prefix(name,a.load_events_with_IDs(EventIDs))
-            #print("loaded events:", events)
-            quads += [a.compute_quad(pars,events)]
+        quads = self._get_quads(EventIDs)
 
         if hasattr(alt_hyp_gen,'count') and hasattr(alt_hyp_gen,'chunk_size'):
             Ns = alt_hyp_gen.count
@@ -513,13 +516,12 @@ class LEECorrectorMaster(LEECorrectorBase):
             bar = Bar('Processing alternate hypotheses in batches of {0}'.format(Nchunk), max=Nbatches)
         else:
             bar = Spinner('Processing alternate hypotheses') # Unknown size
-        
 
-        min_neg2logLs = None
+        max_log_probs = None
         loop_ran = False
         for r in alt_hyp_gen:
             loop_ran = True
-            comb_neg2logLs = None
+            comb_log_probs = None
 
             # Check that user-supplied alt_hyp_gen function gave us
             # usable input. Since this is user-supplied we do particularly
@@ -577,42 +579,42 @@ class LEECorrectorMaster(LEECorrectorBase):
 
             # Input validated, onto the analysis
 
-            for quad,(name,a) in zip(quads,self.LEEanalyses.items()):
+            for name,a in self.LEEanalyses.items():
                 #print("running quad:",name)
-                neg2logLs = quad({name: alt_chunk[name]})
-                if len(neg2logLs.shape)==1:
-                    neg2logLs = tf.expand_dims(neg2logLs,axis=0) # Add in "events" dimension if it was missing due to only one event.
-                elif len(neg2logLs.shape)!=2:
-                    msg = "Shape of neg2logLs array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=events, dim[1]=hypotheses), or 1D if only one event is being processed.".format(name,neg2logLs.shape)
+                log_probs = quads[name]({name: alt_chunk[name]})
+                if len(log_probs.shape)==1:
+                    log_probs = tf.expand_dims(log_probs,axis=0) # Add in "events" dimension if it was missing due to only one event.
+                elif len(log_probs.shape)!=2:
+                    msg = "Shape of log_probs array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=events, dim[1]=hypotheses), or 1D if only one event is being processed.".format(name,log_probs.shape)
                     raise ValueError(msg)
 
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
                 #print("EventIDs:", EventIDs)
-                a.record_alternate_logLs(-0.5*neg2logLs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
+                a.record_alternate_logLs(log_probs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
                 #print("...done")
-                #print("alterate hypothesis neg2logLs:", neg2logLs)
-                if comb_neg2logLs is None:
-                    comb_neg2logLs = neg2logLs
+                #print("alterate hypothesis log_probs:", log_probs)
+                if comb_log_probs is None:
+                    comb_log_probs = log_probs
                 else:
-                    comb_neg2logLs += neg2logLs
+                    comb_log_probs += log_probs
 
             #print("alt_chunk:", alt_chunk)
-            # Select the mininum -2logL from across all alternate hypotheses
-            if min_neg2logLs is not None:
-                all_neg2logLs = tf.concat([tf.expand_dims(min_neg2logLs,axis=-1),comb_neg2logLs],axis=-1)
+            # Select the maximum logL from across all alternate hypotheses
+            if max_log_probs is not None:
+                all_log_probs = tf.concat([tf.expand_dims(max_log_probs,axis=-1),comb_log_probs],axis=-1)
             else:
-                all_neg2logLs = comb_neg2logLs
-            min_neg2logLs = tf.reduce_min(all_neg2logLs,axis=-1)
+                all_log_probs = comb_log_probs
+            max_log_probs = tf.reduce_max(all_log_probs,axis=-1)
             bar.next()
         bar.finish()
         if not loop_ran:
             msg = "Problem processing alternate hypotheses! The user-supplied generator of hypothesis parameters did not yield any output!"
             raise ValueError(msg)
-        elif min_neg2logLs is None:
+        elif max_log_probs is None:
             msg = "Problem processing alternate hypotheses! Result of batch was None!"
             raise ValueError(msg)
-        return -0.5*min_neg2logLs # Convert to log_prob convention  
+        return max_log_probs
  
     def process_alternate_observed(self,alt_hyp_gen,quad_only=True,dbtype='hdf5'):
         """Perform fits for all supplied alternate hypotheses, for just the *observed* data"""
@@ -621,7 +623,7 @@ class LEECorrectorMaster(LEECorrectorBase):
         # Extract data for null hypothesis (should be pre-computed by process_null)
 
               
-        # Write the compute min_neg2logL to disk for this batch of events
+        # Write the compute max_log_prob to disk for this batch of events
         data = pd.DataFrame(max_log_prob.numpy(),columns=['log_prob_quad'])
         data.index.name = 'EventID' 
  
@@ -675,8 +677,8 @@ class LEECorrectorMaster(LEECorrectorBase):
            running out of RAM. Will have likelihoods for all bootstrap events
            for all alternate hypotheses."""
   
-        all_min_neg2logL = None
-        all_b_neg2logL = None
+        all_max_log_prob = None
+        all_b_log_prob = None
         if N=='all': # Special keyword to just re-do profiling rather than bootstrap resampling. To cross-check this profiling calculation with original calculation.
             print("Recomputing profile over alternate hypothesis for existing events (no resampling...)")
         else:
@@ -692,19 +694,19 @@ class LEECorrectorMaster(LEECorrectorBase):
                 else:
                     if i==Nbatches-1 and N % batch_size > 0: size = N % batch_size
                     else: size = batch_size
-                all_neg2logLs = None
-                these_b_neg2logLs = None
+                all_log_probs = None
+                these_b_log_probs = None
                 for name,a in self.LEEanalyses.items():
-                    s_neg2logLs, b_neg2logLs = a.get_bootstrap_sample(size,dbtype=dbtype)
-                    if s_neg2logLs is None: 
+                    s_log_probs, b_log_probs = a.get_bootstrap_sample(size,dbtype=dbtype)
+                    if s_log_probs is None: 
                         done = True
                         break
-                    #print("s_neg2logLs.shape:", s_neg2logLs.shape)
-                    #print("b_neg2logLs.shape:", b_neg2logLs.shape)
-                    if all_neg2logLs is None: all_neg2logLs = s_neg2logLs
-                    else: all_neg2logLs += s_neg2logLs
-                    if these_b_neg2logLs is None: these_b_neg2logLs = b_neg2logLs
-                    else: these_b_neg2logLs += b_neg2logLs
+                    #print("s_log_probs.shape:", s_log_probs.shape)
+                    #print("b_log_probs.shape:", b_log_probs.shape)
+                    if all_log_probs is None: all_log_probs = s_log_probs
+                    else: all_log_probs += s_log_probs
+                    if these_b_log_probs is None: these_b_log_probs = b_log_probs
+                    else: these_b_log_probs += b_log_probs
                     if N=='all':
                         print("Analysis {0}, batch {1}".format(name, i))
                     else:
@@ -712,21 +714,21 @@ class LEECorrectorMaster(LEECorrectorBase):
 
 
                 if not done:
-                    #print("all_neg2logLs.shape:",all_neg2logLs.shape)
+                    #print("all_log_probs.shape:",all_log_probs.shape)
 
                     # Profile
-                    min_neg2logL = tf.reduce_min(all_neg2logLs,axis=0) # Signal dimension is first here, different to elsewhere
-                    #print("min_neg2logL.shape:", min_neg2logL.shape)
+                    max_log_prob = tf.reduce_max(all_log_probs,axis=0) # Signal dimension is first here, different to elsewhere
+                    #print("max_log_prob.shape:", max_log_prob.shape)
                             
                     # Write to disk? Could just return if this is fast. Test to find out.
-                    if all_min_neg2logL is None: all_min_neg2logL = min_neg2logL
-                    else: all_min_neg2logL = tf.concat([all_min_neg2logL,min_neg2logL],axis=0) # Only one dimension left
+                    if all_max_log_prob is None: all_max_log_prob = max_log_prob
+                    else: all_max_log_prob = tf.concat([all_max_log_prob,max_log_prob],axis=0) # Only one dimension left
  
-                    if all_b_neg2logL is None: all_b_neg2logL = these_b_neg2logLs
-                    else: all_b_neg2logL = tf.concat([all_b_neg2logL,these_b_neg2logLs],axis=0)
+                    if all_b_log_prob is None: all_b_log_prob = these_b_log_probs
+                    else: all_b_log_prob = tf.concat([all_b_log_prob,these_b_log_probs],axis=0)
             i+=1
         if N!='all': bar.finish()
-        return all_min_neg2logL, all_b_neg2logL
+        return all_max_log_prob, all_b_log_prob
 
     def load_eventIDs(self,N,reftable=None,condition=None,offset=0):
         """Loads eventIDs from database where 'condition' is true in 'reftable'
@@ -1081,17 +1083,36 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         return log_prob_sb
 
+    def _get_quad(self,EventIDs,fitted_nuis_pars=None):
+        """Get quadratic approximations to likelihood surfaces for the given EventIDs
+           (using the null hypothesis (with fitted nuisance parameters) as the expansion point)"""
+
+        if isinstance(EventIDs, str) and EventIDs=='observed':
+            observed_mode = True
+        else:
+            observed_mode = False
+            EventIDs = EventIDs.numpy()
+
+        if fitted_nuis_pars is None:
+            # Assume they were written to the database already and load them
+            fitted_nuis_pars = self.load_null_nuis_pars(EventIDs)
+            if fitted_nuis_pars is None:
+                raise ValueError("Pre-fitted nuisance parameters for a batch of events could not be found! Have all null hypothesis fits been done? Fitted nuisance parameters need to be either directly supplied to this function, or else exist in the output database.")
+        events = c.add_prefix(self.analysis.name,self.load_events_with_IDs(EventIDs))
+        #print("loaded events:", events)
+        pars = c.deep_merge(self.null_hyp,fitted_nuis_pars) # Expansion point(s)
+        quad = self.compute_quad(pars,events)
+        return quad
+
     def compute_quad(self,pars,events):
         """Compute quadratic approximations of profile likelihood for the specified
-           set of events, expanding around the supplied nuisance parameter point with
-           the null hypothesis
-           
+           set of events, expanding around the supplied parameter point.
+
            TODO: Having some shape confusions here. I *think* we need a set of nuisance
            parameters for each event, e.g. the best fit nuisance parameters for each
            event under (say) the background-only hypothesis. So need to make sure pars
            and events supplied have dimensions consistent with this.
         """
-
 
         par_size = c.deep_size(pars,axis=0)
 
@@ -1112,8 +1133,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         #print("pars:", pars)
         #print("events_sq:", events_sq)
 
-        joint_fitted_b = JointDistribution([self.analysis],c.deep_merge(self.null_hyp,pars))
-        quadf = joint_fitted_b.quad_loglike_f(events_sq)
+        expansion_point = JointDistribution([self.analysis],pars)
+        quadf = expansion_point.log_prob_quad_f(events_sq)
 
         #print("quadf:", quadf)
 
@@ -1134,7 +1155,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         # Sanity check input shapes
         if len(log_probs.shape) != 2:
-            msg = "log_probs supplied for recording are not 2D! Dim 0 should correspond to trials/events/pseudoexperiments/samples, while dim 1 should correspond to 'alternate hypotheses'. Any other dimensions are not valid (e.g. alternate hypothesis arrays must be flattened to 1D). Shape was: {0}".format(neg2logLs.shape)
+            msg = "log_probs supplied for recording are not 2D! Dim 0 should correspond to trials/events/pseudoexperiments/samples, while dim 1 should correspond to 'alternate hypotheses'. Any other dimensions are not valid (e.g. alternate hypothesis arrays must be flattened to 1D). Shape was: {0}".format(log_probs.shape)
             raise ValueError(msg)
 
         if isinstance(EventIDs, str) and EventIDs=='observed':
@@ -1163,7 +1184,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 maxTable = 1
                 events_per_table = 1
             else:
-                events_per_table = 1000.
+                events_per_table = 1000
                 minEventID = np.min(EventIDs)
                 maxEventID = np.max(EventIDs)
                 minTable = int(minEventID // events_per_table)
@@ -1178,7 +1199,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                  if np.sum(mask)>0:
                      #print("EventIDs:", mask)
                      #print("mask:", mask)
-                     #print("neg2logLs:", neg2logLs)
+                     #print("log_probs:", log_probs)
                      log_prob_batch = log_probs[mask]
                      if observed_mode:
                          eventID_batch = ['observed']
@@ -1195,7 +1216,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      # sql.add_columns(cur,this_table,columns)
 
                      # # Add likelihoods to output record.
-                     # data = pd.DataFrame(neg2logL_batch.numpy().T,index=altIDs,columns=col_names)
+                     # data = pd.DataFrame(log_prob_batch.numpy().T,index=altIDs,columns=col_names)
                      # data.index.name = 'SignalID' 
                      # sql.upsert(cur,this_table,data,primary='SignalID')
 
@@ -1214,7 +1235,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                          this_table = self.full_table_quad+"_batch_{0}".format(i)
                          columns = [("E_{0}".format(E_id),"array") for E_id in eventID_batch] # We defined a new datatype, 'array', for sqlite to use to store numpy arrays
                      col_names = [x[0] for x in columns]
-                     #print("neg2logL_batch:", neg2logL_batch.numpy().T)
+                     #print("log_prob_batch:", log_prob_batch.numpy().T)
                      #print("col_names:", col_names)
                      data = pd.DataFrame(log_prob_batch.numpy().T,columns=col_names)
 
@@ -1330,28 +1351,28 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                         these_events += [tf.stack(row,axis=1)] # Join each row of results along events direction 
                     all_events += [tf.concat(these_events,axis=0)] # Join all these events along alternate hypothesis direction
             if len(all_events) > 0:
-                alternate_neg2logL = tf.concat(all_events,axis=1) # Join all event columns together
+                alternate_log_prob = tf.concat(all_events,axis=1) # Join all event columns together
             else:
-                alternate_neg2logL = None
+                alternate_log_prob = None
             self.close_db(conn)
         elif dbtype is 'hdf5':
             for ID in bootstrap_EventIDs:
                 all_events += [f["E_{0}".format(ID)][:]]  
             f.close()
             if len(all_events) > 0:
-                alternate_neg2logL = tf.stack(all_events,axis=1) # Join all event columns together
+                alternate_log_prob = tf.stack(all_events,axis=1) # Join all event columns together
             else:
-                alternate_neg2logL = None
+                alternate_log_prob = None
 
-        # Actually we also need the background-only neg2logL values, so grab those too
+        # Actually we also need the background-only log_prob values, so grab those too
         # I think here it is fine, and easier, to load them all and do the selection in RAM.
         if len(bootstrap_EventIDs)>0:
-            df = self.load_results(self.null_table,['EventID','neg2logL'])
-            background_neg2logL = tf.constant(df.loc[bootstrap_EventIDs]['neg2logL'].to_numpy(),dtype=c.TFdtype) 
+            df = self.load_results(self.null_table,['EventID','log_prob'])
+            background_log_prob = tf.constant(df.loc[bootstrap_EventIDs]['log_prob'].to_numpy(),dtype=c.TFdtype) 
         else:
-            background_neg2logL = None
+            background_log_prob = None
 
-        return alternate_neg2logL, background_neg2logL
+        return alternate_log_prob, background_log_prob
 
     def record_bf_alternate_stats(self):
         pass
@@ -1387,11 +1408,23 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             if continue_processing:
                 #print("Fitting w.r.t background-only samples")
                 log_prob_b, joint_fitted_b, nuis_pars_b = joint.fit_nuisance(events, alt_hyp, log_tag='q_'+name)
-                #print("nuis_pars_b:", nuis_pars_b)
+                print("nuis_pars_b:", nuis_pars_b)
+
+                # Also compute the quad approximation, which can in fact improve on the numerical results since it uses Hessian information. Kind of like a "last step" for the optimizer.
+                quad = self._get_quad(EventIDs,nuis_pars_b['all'])
+                log_prob_quad = quad(alt_hyp)
+                table = self.local_table+name
+                if len(log_prob_quad.shape)==1:
+                    log_prob_quad = tf.expand_dims(log_prob_quad,axis=0) # Add in "events" dimension if it was missing due to only one event.
+                elif len(log_prob_quad.shape)!=2:
+                    msg = "Shape of log_prob_quad array returned from quadratic nuisance parameter estimating function ('compute_quad') for analysis {0} was invalid! Shape was {1}, but it should be 2D (dim[0]=events, dim[1]=hypotheses), or 1D if only one event is being processed.".format(self.name,log_probs.shape)
+                    raise ValueError(msg)
+
                 # Write events to output database               
-                # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihood
-                arrays = [fix_dims(log_prob_b)]
-                cols = ["log_prob"]
+                # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihoods for alternate hypotheses
+                # Better to use these rather than parameters that come out of *this* quad function I think...
+                arrays = [fix_dims(log_prob_b),log_prob_quad]
+                cols = ["log_prob","log_prob_quad"]
                 fitted_pars_b = nuis_pars_b["fitted"]
 
                 n_pars = len([p for a in fitted_pars_b.values() for p in a.values()]) 

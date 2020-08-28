@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 from pathlib import Path
 import shutil
+import tensorflow as tf
 from tensorflow_probability import distributions as tfd
 import jmctf.common as c
 from jmctf import JointDistribution
@@ -136,17 +137,31 @@ def test_process_alternate(process_alternate):
 def test_trivial_alternate(fresh_lee,params1):
     """Tests that same log_prob values are obtained for
        null and alternate fits when the only alternate
-       hypothesis *is* the null"""
-    fresh_lee.add_events(N)
+       hypothesis *is* the null.
+       Also checks that results match 'vanilla' results
+       from JointDistribution"""
+    # Need a largish number of events here to detect some rare problems
+    fresh_lee.add_events(1000)
     fresh_lee.process_null()
     fresh_lee.process_alternate(get_hyp_gen_1(params1))
     df_null, df_null_obs = fresh_lee.load_results(fresh_lee.null_table,['log_prob'],get_observed=True)
     df_prof, df_prof_obs = fresh_lee.load_results(fresh_lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
     print("df_null:", df_null)
+    print("df_null['log_prob']:",df_null['log_prob'])
     print("df_prof:", df_prof)
+    print("df_prof['log_prob_quad']:",df_prof['log_prob_quad'])
     print("df_null_obs:", df_null_obs)
     print("df_prof_obs:", df_prof_obs)
+    # Get 'vanilla' JointDistribution results
+    samples = fresh_lee.load_all_events() # Loads all events currently on disk
+    joint = JointDistribution(fresh_lee.analyses,params1)
+    log_prob, joint_fitted, par_dict = joint.fit_nuisance(samples,params1)
+    print("log_prob:", log_prob)
+    print("df_null['log_prob'] - log_prob:", df_null['log_prob'] - log_prob[:,0,0])
+    print("df_prof['log_prob_quad'] - log_prob:", df_prof['log_prob_quad'] - log_prob[:,0,0])
     print("df_null['log_prob'] - df_prof['log_prob_quad']:", df_null['log_prob'] - df_prof['log_prob_quad'])
-    tol = 1e-3 # Seems a little high? Why isn't it better?
-    assert (df_null['log_prob'] - df_prof['log_prob_quad'] < tol).all()
-    assert (df_null_obs['log_prob'] - df_prof_obs['log_prob_quad'] < tol).all()
+    tol = 1e-6
+    assert ((df_null['log_prob'] - log_prob[:,0,0]).abs() < tol).all() # LEE null vs JointDistribution
+    assert ((df_prof['log_prob_quad'] - log_prob[:,0,0]).abs() < tol).all() # LEE (quad) alternate vs JointDistribution
+    assert ((df_null['log_prob'] - df_prof['log_prob_quad']).abs() < tol).all() # LEE: null vs (quad) alternate (redundant but why not do it)
+    assert ((df_null_obs['log_prob'] - df_prof_obs['log_prob_quad']).abs() < tol).all() # LEE: null vs alternate (obs)

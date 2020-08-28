@@ -312,9 +312,16 @@ def deep_size(d,axis=0):
                 size = None
     elif axis==0:
         try:
-            size = len(d)
-        except TypeError:
-            size = d.shape[0]
+            shape = d.shape
+            if shape == ():
+                size = 1 # "scalar" array
+            else:
+                size = shape[0]
+        except AttributeError:
+            try:
+                size = len(d)
+            except TypeError:
+                size = 1 # Neither list-like nor array like. Might just be a float; will count this and any other type of object as "1"
     else:
         size = d.shape[axis]
     return size
@@ -440,6 +447,25 @@ def deep_broadcast(d,shape):
 def tf_all_equal(a,b,tol=0):
     return tf.reduce_all(tf.less_equal(tf.abs(a-b),tol))
 
+def tf_all_equal_frac_tol(a,b,frac_tol,fallback_tol):
+    m0 = a==0
+    diff = tf.abs(a - b)
+    if a.shape==():
+        # Scalar cases, cannot use mask
+        if m0: 
+            return tf.reduce_all(tf.less_equal(diff,fallback_tol))
+        else:  
+            return tf.reduce_all(tf.less_equal(diff/tf.abs(a)) < frac_tol)
+    else:
+        # Array cases
+        nm0 = tf.math.logical_not(m0)
+        diff0 = tf.boolean_mask(diff,m0)
+        diffn0 = tf.boolean_mask(diff,nm0)
+        an0 = tf.boolean_mask(a,nm0)
+        q1 = tf.reduce_all(tf.less_equal(diff0,fallback_tol))
+        q2 = tf.reduce_all(tf.less_equal(diffn0/tf.abs(an0),frac_tol))
+        return q1 & q2
+
 def deep_all_equal(a,b):
     """Check that for every item in a, there is a matching item in b in that can be considered equal
        (in a nested sense). TODO: currently doesn't check for extra stuff that might be in b"""
@@ -450,6 +476,19 @@ def deep_all_equal(a,b):
             if not equal: break
     else:
         equal = tf_all_equal(a,b)
+    return equal
+
+def deep_all_equal_frac_tol(a,b,frac_tol,fallback_tol):
+    """As 'deep_all_equal' but with an optional *fractional* tolerance setting. 
+       For reference values that are exactly zero, a 'fallback' absolute tolerance is
+       used instead."""
+    if isinstance(a, Mapping):
+        equal = True 
+        for k,v in a.items():
+            equal = deep_all_equal_frac_tol(v,b[k],frac_tol,fallback_tol)
+            if not equal: break
+    else:
+        equal = tf_all_equal_frac_tol(a,b,frac_tol,fallback_tol)
     return equal
 
 # TODO: do I use this? It's a bit of a strange thing to do.

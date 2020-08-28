@@ -21,8 +21,8 @@ analyses = [norm]
 
 N = 200 # Number of alternate hypotheses to generate (controls density of hypotheses)
 null_mu = 0
-#mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
-mu = np.array([0])
+mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
+#mu = np.array([0])
 
 class SigGen:
     """Object to supply signal hypotheses in chunks
@@ -91,11 +91,14 @@ lee.process_null()
 lee.process_alternate(get_hyp_gen,new_events_only=True)
 
 # Load up results from the output databases (as pandas dataframes)
-df_null, df_null_obs = lee.load_results(lee.null_table,['log_prob'],get_observed=True)
-df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
+#df_null, df_null_obs = lee.load_results(lee.null_table,['log_prob_quad'],get_observed=True) # Error; don't have log_prob_quad for 'observed' case yet
+#df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
+df_null = lee.load_results(lee.null_table,['log_prob_quad'])
+df_prof = lee.load_results(lee.profiled_table,['log_prob_quad','logw'])
+
 
 # Compute likelihood ratios
-LLR = -2*(df_null['log_prob'] - df_prof['log_prob_quad'])
+LLR = -2*(df_null['log_prob_quad'] - df_prof['log_prob_quad'])
 print("LLR:", LLR)
 
 # Plot TS distribution 
