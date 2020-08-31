@@ -123,7 +123,7 @@ class NormalTEAnalysis(BaseAnalysis):
            Requires unit-scaled parameters as input 
         """
         Asamples = {}
-        mu = signal_pars['mu'] * self.mu_scaling
+        mu = tf.constant(signal_pars['mu'] * self.mu_scaling, dtype=c.TFdtype)
         theta = tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0) # Expand to match shape of signal list 
         Asamples["x"] = tf.expand_dims(mu,0) # Expand to sample dimension size 1
         Asamples["x_theta"] = tf.expand_dims(theta,0) # Expand to sample dimension size 1

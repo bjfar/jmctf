@@ -199,11 +199,13 @@ def convert_to_TF_variables(d):
                raise ValueError(msg) from e
    return out
 
-def convert_to_TF_constants(val,ignore_variables=False):
+def convert_to_TF_constants(val,ignore_variables=False,auto_convert_dtype=True):
    """Convert bottom-level entries of dictionary to TensorFlow 'Tensor' objects
       If ignore_variables is True then dictionary values that are TensorFlow
       'Variable' objects will be left unchanged. Otherwise, their existence in
       the input dictionary will cause an error to be raised.
+      If auto_convert_dtype is true then pre-existing constant tensors will be automatically cast to
+      the required dtype.
    """
    if isinstance(val,tf.Variable):
        if ignore_variables:
@@ -211,11 +213,17 @@ def convert_to_TF_constants(val,ignore_variables=False):
            out = val
        else:
            # Shouldn't be trying to convert Variables to constant tensors!
-           msg = "Attempted to convert dictionary entry with key '{0}' (which is a TensorFlow 'Variable' object) into a constant TensorFlow 'Tensor' object! This conversion is not allowed, please make sure that, for example, parameters returned from Analysis objects are not already Variable objects."
+           msg = "Attempted to convert a dictionary entry which is a TensorFlow 'Variable' object into a constant TensorFlow 'Tensor' object! This conversion is not allowed. Please make sure that, for example, parameters returned from Analysis objects are not already Variable objects."
            raise TypeError(msg)
    elif isinstance(val,tf.Tensor):
-       out = val
-       #print(k, 'was already tf.Tensor, left alone:', val)  
+       if val.dtype == TFdtype:
+           out = val
+           #print(k, 'was already tf.Tensor, left alone:', val)  
+       elif auto_convert_dtype:
+           out = tf.cast(val,TFdtype)
+       else:
+           msg = "Constant tensor of incorrect dtype detected ({0}, when {1} is required), and auto_convert_dype=False! Please either ensure a tensor of the correct dtype is input, or else set auto_convert_dtype=True.".format(val.dtype,TFdtype)
+           raise ValueError(msg)
    elif isinstance(val, Mapping):
        out = {}
        for k,v in val.items():

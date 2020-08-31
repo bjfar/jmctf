@@ -19,7 +19,7 @@ analyses = [norm]
 # For this test, the "mu" parameter for NormalAnalysis will be the
 # one we use to create our set of alternate hypothesis
 
-N = 200 # Number of alternate hypotheses to generate (controls density of hypotheses)
+N = 20 # Number of alternate hypotheses to generate (controls density of hypotheses)
 null_mu = 0
 mu = np.linspace(null_mu - 5*sigma, null_mu + 5*sigma, N)
 #mu = np.array([0])
@@ -54,8 +54,8 @@ import jmctf.common as c
 sigma_t = 1.
 bcast = 1+0*mu # simple trick to broadcast sigma_t. NOTE: Broadcasting can be done automatically in LEE object, this is just for the sake of keeping SigGen simple.
 null_hyp = {"Test normal": {"mu": 0, "sigma_t": sigma_t}}
+alt_hyp_local = {"Test normal": {"mu": mu[-1], "sigma_t": sigma_t}} 
 alt_hyp = {"Test normal": {"mu": mu, "sigma_t": sigma_t*bcast}} 
-
 DOF = 1
 
 # Hypothesis generator function for use with LEE in tests
@@ -64,7 +64,7 @@ DOF = 1
 def get_hyp_gen():
     return SigGen(N,alt_hyp)
 
-from jmctf.LEE import LEECorrectorMaster
+from jmctf.lee import LEECorrectorMaster
 
 path = 'Test_normal'
 master_name = 'test_1'
@@ -85,11 +85,14 @@ lee.add_events(1e3)
 # Fit null hypothesis nuisance parameters to recorded samples
 lee.process_null()
 
+# Fit a single fixed alternate hypothesis, for point test vs null
+lee.process_alternate_local(alt_hyp_local,name="mu={0}".format(mu[-1]))
+
 # Fit all alternate hypothesis nuisance parameters to recorded
 # samples, recording results only for the one which is the best 
 # fit for each sample (not feasible, or necessary, to record them all)
 lee.process_alternate(get_hyp_gen,new_events_only=True)
-
+ 
 # Load up results from the output databases (as pandas dataframes)
 #df_null, df_null_obs = lee.load_results(lee.null_table,['log_prob_quad'],get_observed=True) # Error; don't have log_prob_quad for 'observed' case yet
 #df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)

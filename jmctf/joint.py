@@ -59,7 +59,7 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
        TODO: parameter 'transform' feature not currently in use, probably doesn't work correctly
     """
     #print("In neg2logL:")
-    print("In neg2logL: pars (scaled) = ", pars)
+    #print("In neg2logL: pars (scaled) = ", pars)
     #print("pars:", c.print_with_id(pars,id_only))
     #print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
@@ -747,7 +747,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("Computing Hessian and various matrix operations for all samples...")
         H, g = self.Hessian(samples)
         #print("H:", H)
-        print("g:", g) # Should be close to zero if fits worked correctly
+        #print("g:", g) # Should be close to zero if fits worked correctly
         pars = self.get_pars() # This is what Hessian uses internally
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
@@ -767,13 +767,13 @@ class JointDistribution(tfd.JointDistributionNamed):
         else:
             Hnn_inv = tf.linalg.inv(Hnn)
             gn = self.sub_grad(g,nuisance_i)
-            print("gn:", gn)
+            #print("gn:", gn)
             # Hmm, gn should always be zero if we maximised the logL w.r.t. the nuisance parameters at the expansion point? Should be at a maxima in that direction?
             #gn *= 0. # Test effect of enforcing this
             A = tf.linalg.matvec(Hnn_inv,gn)
             B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         #print("...done!")
-        print("A:", A)
+        #print("A:", A)
         #print("B:", B)
         kwargs = {"A":A, "B":B, "interest":interest_p, "nuisance":nuisance_p}
         return kwargs
@@ -845,13 +845,13 @@ class JointDistribution(tfd.JointDistributionNamed):
             #print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
 
             # For "null expansion" case we should have s - s_0 = 0, so check this
-            print("s:", s)
-            print("s_0:", s_0)
-            print("theta_0:", theta_0)
-            print("A:", A)
-            print("tf.expand_dims(s,axis=0) - s_0:",tf.expand_dims(s,axis=0) - s_0)
-            print("tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0):", tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0))
-            print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1))
+            #print("s:", s)
+            #print("s_0:", s_0)
+            #print("theta_0:", theta_0)
+            #print("A:", A)
+            #print("tf.expand_dims(s,axis=0) - s_0:",tf.expand_dims(s,axis=0) - s_0)
+            #print("tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0):", tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0))
+            #print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1))
             # At expansion point theta_prof = theta_0, which requires A = 0. Check this. But wait, A does not depend on signal?
 
             # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
