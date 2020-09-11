@@ -96,12 +96,15 @@ lee.process_alternate(get_hyp_gen,new_events_only=True)
 # Load up results from the output databases (as pandas dataframes)
 #df_null, df_null_obs = lee.load_results(lee.null_table,['log_prob_quad'],get_observed=True) # Error; don't have log_prob_quad for 'observed' case yet
 #df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
-df_null = lee.load_results(lee.null_table,['log_prob_quad'])
+log_p_lab = 'log_prob_quad'
+df_null = lee.load_results(lee.null_table,['log_prob','log_prob_quad'])
 df_prof = lee.load_results(lee.profiled_table,['log_prob_quad','logw'])
 
+# Sometimes (in null case) the log_prob_quad result can improve on the original fit. Select it when this is the case.
+log_p_null = df_null.max(axis=1)
 
 # Compute likelihood ratios
-LLR = -2*(df_null['log_prob_quad'] - df_prof['log_prob_quad'])
+LLR = -2*(log_p_null - df_prof['log_prob_quad'])
 print("LLR:", LLR)
 
 # Plot TS distribution 

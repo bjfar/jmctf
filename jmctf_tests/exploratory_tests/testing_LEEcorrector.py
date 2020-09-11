@@ -1,6 +1,6 @@
 """Testing LEEcorrector objects"""
 
-from jmctf.LEE import collider_analyses_from_long_YAML, LEECorrectorMaster
+from jmctf.lee import collider_analyses_from_long_YAML, LEECorrectorMaster
 import jmctf.common as c
 from tensorflow_probability import distributions as tfd
 import tensorflow as tf
@@ -13,7 +13,6 @@ import scipy.interpolate as spi
 N = int(1e2)
 do_mu_tests=True
 do_gof_tests=True
-
 
 print("Starting...")
 
@@ -62,7 +61,7 @@ print("signals:",signals)
 class SigGen:
     """Object to supply signal hypotheses in chunks
        Replace with something that e.g. reads from HDF5 file
-       in real cases. Needs to be iterable"""
+       in real cases. Needs to be usable as an generator."""
     def __init__(self,N,alt_hyp):
         self.count = N
         self.chunk_size = 1000
@@ -70,17 +69,22 @@ class SigGen:
         self.j = 0
 
     def __iter__(self):
-        j = 0
-        return self
+        while True:
+            j = self.j
+            size = self.chunk_size
+            chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.alt_hyp.items()}
+            this_chunk_size = c.deep_size(chunk)
+            if this_chunk_size==0: # Or some other error?
+                break # Finished
+            ids = list(range(j,j+this_chunk_size))
+            self.j += this_chunk_size
+            yield chunk, ids
 
-    def __next__(self):
-        j = self.j
-        size = self.chunk_size
-        chunk = {name: {par: dat[j:j+size] for par,dat in a.items()} for name,a in self.alt_hyp.items()}
-        self.j += size
-        this_chunk_size = c.deep_size(chunk) 
-        print("chunk:", chunk)
-        return chunk, list(range(j,j+this_chunk_size))
+# Hypothesis generator function for use with LEE in tests
+# We actually need to provide a function that *creates* the generator since we need to run it multiple times.
+# Replace with something that e.g. reads from HDF5 file in real cases.
+def get_hyp_gen():
+    return SigGen(Ns,signals)
 
 nosignal = {a.name: {'s': tf.constant([tuple(0. for sr in a.SR_names)],dtype=float)} for a in analyses_read}
 DOF = 3
@@ -95,7 +99,7 @@ nullname = 'background'
 lee = LEECorrectorMaster(analyses_read,path,master_name,nosignal,nullname)
 
 # Make sure we are providing all the required signal hypothesis parameters
-free, fixed, nuis = lee.get_parameter_structure()
+free, fixed, nuis = lee.decomposed_parameter_shapes()
 print("free:", free)
 print("fixed:", fixed)
 print("nuis:", nuis)
@@ -106,20 +110,21 @@ lee.add_events(int(1e3))
 lee.process_null()
 sig_name = "cherry_picked"
 lee.process_alternate_local(signal_test,name=sig_name)
-lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000)
+lee.process_alternate(get_hyp_gen,new_events_only=True,event_batch_size=10000)
 #lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='hdf5')
 #lee.process_alternate(SigGen(Ns,signals),new_events_only=True,event_batch_size=10000,dbtype='sqlite')
 
-bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1000,batch_size=100)
-#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample(1e5,batch_size=100)
-#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='hdf5')
-#bootstrap_neg2logL, bootstrap_b_neg2logL = lee.get_bootstrap_sample('all',batch_size=100,dbtype='sqlite')
-bootstrap_chi2 = bootstrap_b_neg2logL - bootstrap_neg2logL
+bootstrap_log_prob_quad, bootstrap_b_log_prob_quad = lee.get_bootstrap_sample(1000,batch_size=100)
+#bootstrap_log_prob_quad, bootstrap_b_log_prob_quad = lee.get_bootstrap_sample(1e5,batch_size=100)
+#bootstrap_log_prob_quad, bootstrap_b_log_prob_quad = lee.get_bootstrap_sample('all',batch_size=100,dbtype='hdf5')
+#bootstrap_log_prob_quad, bootstrap_b_log_prob_quad = lee.get_bootstrap_sample('all',batch_size=100,dbtype='sqlite')
+bootstrap_chi2 = -2*(bootstrap_b_log_prob_quad - bootstrap_log_prob_quad)
 
-df_null, df_null_obs = lee.load_results(lee.local_table+lee.nullname,['neg2logL'],get_observed=True)
-df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['neg2logL_quad','logw'],get_observed=True)
-chi2_quad     = df_null['neg2logL'] - df_prof['neg2logL_quad']
-chi2_quad_obs = df_null_obs['neg2logL'][0] - df_prof_obs['neg2logL_quad'][0]
+log_prob_loc = 'log_prob_quad' # Log prob to use for 'local' fits, e.g. null or 'alternate local'. 'log_prob' doesn't exist for full alternate profiling due to cpu expense, so no choice in that case.
+df_null, df_null_obs = lee.load_results(lee.local_table+lee.nullname,['log_prob','log_prob_quad'],get_observed=True)
+df_prof, df_prof_obs = lee.load_results(lee.profiled_table,['log_prob_quad','logw'],get_observed=True)
+chi2_quad     = -2*(df_null[log_prob_loc] - df_prof['log_prob_quad'])
+chi2_quad_obs = -2*(df_null_obs[log_prob_loc][0] - df_prof_obs['log_prob_quad'][0])
 w = np.exp(df_prof['logw'])
 #chi2_quad = df['neg2logL_profiled_quad']
 
@@ -132,13 +137,13 @@ for aname,a in list(lee.LEEanalyses.items()) + [('combined',lee)]:
     ax1 = fig.add_subplot(121)
     ax2 = fig.add_subplot(122)
     ax2.set(yscale='log')
-
-    df_null = a.load_results(a.local_table+a.nullname,['neg2logL'])
-    df_sig = a.load_results(a.local_table+sig_name,['neg2logL'])
-  
-    qb  = df_null['neg2logL']
+    df_null = a.load_results(a.local_table+a.nullname,['log_prob','log_prob_quad'])
+    df_sig = a.load_results(a.local_table+sig_name,['log_prob','log_prob_quad'])
+    lab1='log_prob'
+    lab2='log_prob_quad'
+    qb  = -2*df_null[lab1]
     #qb_quad = q_quad[:,i].numpy()
-    qsb = df_sig['neg2logL']
+    qsb = -2*df_sig[lab2]
     if np.sum(np.isfinite(qb)) < 2:
         print("qb mostly nan!")
     if np.sum(np.isfinite(qsb)) < 2:
@@ -196,6 +201,15 @@ for aname,a in list(lee.LEEanalyses.items()) + [('combined',lee)]:
 
     fig.tight_layout()
     fig.savefig("{0}/local_hist_{1}_{2}.png".format(path,sig_name,aname))
+
+# Check difference b/w quad and non-quad results
+p_null = df_null['log_prob']
+pq_null = df_null['log_prob_quad']
+fig = plt.figure(figsize=(6,4))
+ax = fig.add_subplot(111)
+sns.distplot(p_null - pq_null, color='b', kde=False, ax=ax, norm_hist=True, label="p - p_quad")
+fig.tight_layout()
+fig.savefig("{0}/quad_vs_non_quad_{1}_{2}.png".format(path,master_name,nullname))
 
 # Global/profiled histograms
 fig  = plt.figure(figsize=(12,4))

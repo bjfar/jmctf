@@ -44,3 +44,10 @@ def get_hypothesis_lists(name=None):
     else:
         out = analysis_tests[name].get_three_hypotheses()
     return out
+
+def get_hypothesis_curves(name=None):
+    if name is None:
+        out = {name: a.get_hypothesis_curves() for name,a in analysis_tests.items()}
+    else:
+        out = analysis_tests[name].get_hypothesis_curves()
+    return out

@@ -58,6 +58,19 @@ def deep(d_arg=0):
         return deep_f
     return deep_decorator
 
+def deep_binary(f):
+    def deep_binary_decorator(a,b):
+        """Decorator to make binary operation f apply over the bottom level of nested dictionaries
+           TODO: currently doesn't check for extra stuff that might be in b"""
+        if isinstance(a, Mapping):
+            out = {}
+            for k,v in a.items():
+                out[k] = deep_minus(v,b[k])
+        else:
+            out = f(a,b)
+        return out
+    return deep_binary_decorator
+
 def adapt_array(arr):
     """
     http://stackoverflow.com/a/31312102/190597 (SoulNibbler)
@@ -305,6 +318,22 @@ def extract_ith(d,i,keep_axis=False):
         out = d[i]
     return out
 
+def rlen(x):
+    """Robust form of 'len' that returns the length of the an object, defined as
+       either its 'len', the size of the 0th axis, or None if it is a scalar object."""
+    try:
+        shape = x.shape
+        if shape == ():
+            size = None # "scalar" array
+        else:
+            size = shape[0]
+    except AttributeError:
+        try:
+            size = len(x)
+        except TypeError:
+            size = None # Neither list-like nor array like. Might just be a float; will count this and any other type of object as "None" length.
+    return size
+
 def deep_size(d,axis=0):
     """Measure the size along an axis of all bottom level objects in nested dictionaries.
        If size is consistent, return it, if dict(s) is empty returns -1, otherwise returns None"""
@@ -319,17 +348,8 @@ def deep_size(d,axis=0):
             elif size!=size_v:
                 size = None
     elif axis==0:
-        try:
-            shape = d.shape
-            if shape == ():
-                size = 1 # "scalar" array
-            else:
-                size = shape[0]
-        except AttributeError:
-            try:
-                size = len(d)
-            except TypeError:
-                size = 1 # Neither list-like nor array like. Might just be a float; will count this and any other type of object as "1"
+        size = rlen(d)
+        if size is None: size = 1 # We will say "scalar" objects have size one as far as this function is concerned     
     else:
         size = d.shape[axis]
     return size
@@ -523,6 +543,27 @@ def deep_equals(d,val=None):
             out_val = None
     return out_equal, out_val
 
+@deep_binary
+def deep_minus(a,b):
+    """From every item in a, subtract the matching item in b (in a nested sense). 
+       TODO: currently doesn't check for extra stuff that might be in b"""
+    return a - b
+
+def _get_batch_shape(t,tail_shape):
+    """Get the batch shape for a single sample component given its event_shape
+       Also works for parameter tensors and parameter shapes.
+    """
+    tdims = rlen(tail_shape)
+    print("tdims:", tdims)
+    if tdims is 0 or tdims is None:
+        batch_shape = t.shape # Everything is batch shape
+    elif t.shape[-tdims or None:] != tail_shape:
+        msg = "Supplied trailing shape {0} for tensor does not match tensor dimensions {1}".format(tail_shape,t.shape)
+        raise ValueError(msg)
+    else:
+        batch_shape = t.shape[:-tdims or None]
+    return batch_shape
+
 def sample_batch_shape(sample,event_shapes):
     """Work out the effective 'sample shape + batch shape' for a sample, given a dictionary of
        event shapes.
@@ -531,17 +572,64 @@ def sample_batch_shape(sample,event_shapes):
     """
     batch_shape = None
     for name,x in sample.items():
-        eshape = event_shapes[name]
-        if len(eshape)>0 and x.shape[-len(eshape):] != eshape:
+        try:
+            eshape = event_shapes[name]
+            bshape = _get_batch_shape(x,eshape)
+        except ValueError as e:
+            print("x:", x)
+            print("event_shapes:", event_shapes)
             msg = "Supplied event shape for distribution {0} ({1}) does not match trailing dimensions of sample! ({2})!".format(name,eshape,x.shape)
-            raise ValueError(msg)
-        bshape = x.shape[:-len(eshape) or None]
+            raise ValueError(msg) from e
         if batch_shape is None:
             batch_shape = bshape
         elif batch_shape!=bshape:
             msg = "Inferred batch shapes for samples are not consistent! Inferred batch shape of {0} for samples from distribution {1}, but previously found batch shapes of {2}".format(bshape,name,batch_shape)
             raise ValueError(msg)
     return batch_shape
+
+def dist_batch_shape(parameters,parameter_shapes):
+    """Infer batch shape for a distribution based on shapes of input parameters,
+       by performing broadcasting of all dimensions that don't contribute to
+       the base 'parameter_shape' for each parameter.
+    """
+    batch_shape = None
+    for name,p in parameters.items():
+        try:
+            pshape = parameter_shapes[name]
+            bshape = _get_batch_shape(p,pshape)
+        except ValueError as e:
+            msg = "Supplied parameter shape for parameter {0} ({1}) does not match trailing dimensions of parameter tensor/array! ({2})!".format(name,pshape,p.shape)
+            raise ValueError(msg) from e
+        if batch_shape is None:
+            batch_shape = bshape
+        else:
+            # Now we depart from what sample_batch_shape does, by doing extra broadcasting
+            try:
+                batch_shape = get_bcast_shape(batch_shape,bshape)
+            except ValueError as e:
+                msg = "Could not obtain dist_batch_shape for the provided parameters! The inferred batch shapes for all parameters could not be broadcast to a single consistent shape! Failure occured broadcasting parameter {0} with shape {1} (and batch_shape {2}) to previous largest batch_shape {3}".format(name,p.shape,bshape,batch_shape)
+                raise ValueError(msg) from e
+    return batch_shape   
+
+def bcast_sample_batch_shape(samples,event_shapes,new_batch_shape):
+    """Take 'samples' and broadcast them all against a second batch shape"""
+    out = {}
+    current_batch_shape = sample_batch_shape(samples,event_shapes)
+    for name,x in samples.items():
+        eshape = event_shapes[name]
+        new_shape = [d for d in get_bcast_shape(current_batch_shape,new_batch_shape)] + [d for d in eshape]
+        out[name] = tf.broadcast_to(x,new_shape)
+    return out
+    
+def bcast_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
+    """Take 'parameters' for a distribution and broadcast them all against a second batch shape"""
+    out = {}
+    current_batch_shape = dist_batch_shape(parameters,parameter_shapes)
+    for name,p in parameters.items():
+        pshape = parameter_shapes[name]
+        new_shape = [d for d in get_bcast_shape(current_batch_shape,new_batch_shape)] + [d for d in pshape]
+        out[name] = tf.broadcast_to(p,new_shape)
+    return out
 
 def loose_squeeze(tensor,axis):
     """Applies squeeze to bottom-level dict objects along axis, but isn't an error if the axis

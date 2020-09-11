@@ -1,5 +1,6 @@
 """Unit tests for NormalTEAnalysis class"""
 
+import numpy as np
 import tensorflow as tf
 import jmctf.common as c
 from jmctf.normalte_analysis import NormalTEAnalysis
@@ -24,6 +25,17 @@ def get_three_hypotheses():
             'theta': tf.constant([0.,0.,0.],dtype=c.TFdtype),
             'sigma_t': tf.constant([1e-10,0.5,1.],dtype=c.TFdtype)} # Currently 0 doesn't work due to divide by zero
     return pars
+
+def get_hypothesis_curves():
+    """Curves of hypotheses that should almost always encompass the best-fit point
+       with sufficient density to plot reasonably smooth log-likelihood curves.
+       Returns a dict, in case multiple curves in different directions needed.
+       (keys used to name output tests/plots)"""
+    pars = {'mu': tf.constant(np.linspace(0,10,20),dtype=c.TFdtype),
+            'theta': tf.constant(0.,dtype=c.TFdtype),
+            'sigma_t': tf.constant(1.,dtype=c.TFdtype)} # Currently 0 doesn't work due to divide by zero
+    return {"mu": pars}
+
 # -------------------------------------------------------
 
 def get_model():

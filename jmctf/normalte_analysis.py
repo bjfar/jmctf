@@ -48,8 +48,9 @@ class NormalTEAnalysis(BaseAnalysis):
         mu = pars['mu'] * self.mu_scaling
         theta = pars['theta'] * self.theta_scaling 
  
-        #print("mu:", mu)
-        #print("theta:", theta)
+        print("mu:", mu)
+        print("theta:", theta)
+        print("sigma_t:", pars['sigma_t'])
 
         # Normal models
         norm       = tfd.Normal(loc=mu+theta, scale=self.sigma) # TODO: shapes probably need adjustment
@@ -132,8 +133,8 @@ class NormalTEAnalysis(BaseAnalysis):
     def get_observed_samples(self):
         """Construct dictionary of observed data for this analysis"""
         Osamples = {}
-        Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=c.TFdtype),0),0)
-        Osamples["x_theta"] = tf.expand_dims(tf.expand_dims(tf.constant(0,dtype=c.TFdtype),0),0)
+        Osamples["x"]       = tf.constant(self.x_obs,dtype=c.TFdtype)
+        Osamples["x_theta"] = tf.constant(0,dtype=c.TFdtype)
         return Osamples
 
     def interest_parameter_shapes(self):

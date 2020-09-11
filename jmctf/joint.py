@@ -437,7 +437,9 @@ class JointDistribution(tfd.JointDistributionNamed):
             if a.name not in fixed_pars:
                 msg = "No fixed parameters supplied for analysis {0} during nuisance parameter fit! To fit only the nuisance parameters, fixed values for all non-nuisance parameters need to be provided".format(a.name)
                 raise ValueError(msg)
-            p, fp = a.get_nuisance_parameters(self.get_samples_for(a.name,samples),fixed_pars[a.name])                         # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
+            # Get samples and parameters for this analysis and broadcast them against each other
+            bcast_pars, bcast_samples = a.bcast_parameters_samples(fixed_pars[a.name],self.get_samples_for(a.name,samples))
+            p, fp = a.get_nuisance_parameters(bcast_samples,bcast_pars) # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
             pars[a.name] = a.scale_pars(p)
             all_fixed_pars[a.name] = a.scale_pars(fp)
         #print("pars:", c.print_with_id(pars,id_only))
@@ -488,6 +490,8 @@ class JointDistribution(tfd.JointDistributionNamed):
            (ignores parameters that were used to construct this object).
            If force_numeric is True then asserted 'exactness' of starting guesses
            is ignored and numerical optimisation is run regardless."""
+        if fixed_pars is None:
+            fixed_pars = self.pars # Assume hypotheses provided at construction time
         fp = c.convert_to_TF_constants(fixed_pars)
         all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
 
@@ -558,6 +562,14 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_dict["fitted"] = fitted_pars
         par_dict["fixed"]  = const_pars
         return -0.5*q, joint_fitted, par_dict 
+
+    def get_best_fit(self,samples):
+        """Based on parameters belonging to this object, return the parameters that result
+           in the highest log_prob value for the given input samples.
+           Mainly intended to be used after fitting multiple hypotheses to the same samples.
+        """
+        log_probs = self.log_prob(samples)
+
 
     def Hessian(self,samples):
         """Obtain Hessian matrix (and grad) at input parameter points
@@ -759,8 +771,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("nuisance_i:", nuisance_i)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
         #print("Hii:", Hii)
-        #print("Hnn:", Hnn)
-        #print("Hin:", Hin)
+        print("Hnn.shape:", Hnn.shape if Hnn is not None else None)
+        print("Hin.shape:", Hin.shape if Hin is not None else None)
         if Hnn is None: # Could be None if there aren't any nuisance parameters!
             A = None
             B = None
@@ -798,10 +810,10 @@ class JointDistribution(tfd.JointDistributionNamed):
            Should be used after pars are fitted to the desired expansion point, e.g.
            global best fit, or perhaps a null hypothesis point"""
         prep_kwargs = self.quad_loglike_prep(samples)
-        f = mm.tools.func_partial(self._nuisance_quad,samples=samples,**prep_kwargs)
+        f = mm.tools.func_partial(self._nuisance_quad,**prep_kwargs)
         return f
 
-    def _nuisance_quad(self,signal,samples,A,B,interest,nuisance):
+    def _nuisance_quad(self,signal,A,B,interest,nuisance):
         """Compute nuisance parameter MLEs using pre-computed Taylor expansion
            parameters (for many samples) for a set of signal hypotheses"""
 
@@ -830,40 +842,31 @@ class JointDistribution(tfd.JointDistributionNamed):
             s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
             theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
 
-            #print("s_bshape:", s_bshape)
-            #print("s0_bshape:", s0_bshape)
-            #print("t0_bshape:", t0_bshape)
+            print("s_bshape:", s_bshape)
+            print("s0_bshape:", s0_bshape)
+            print("t0_bshape:", t0_bshape)
  
-            #print("s.shape:", s.shape)
-            #print("s_0.shape:", s_0.shape)
-            #print("theta_0.shape:", theta_0.shape)
-            #print("A.shape:", A.shape)
-            #print("B.shape:", B.shape)
+            print("s.shape:", s.shape)
+            print("s_0.shape:", s_0.shape)
+            print("theta_0.shape:", theta_0.shape)
+            print("A.shape:", A.shape)
+            print("B.shape:", B.shape)
 
-            #print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
-            #print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
-            #print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
+            print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
+            print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
+            print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
 
-            # For "null expansion" case we should have s - s_0 = 0, so check this
-            #print("s:", s)
-            #print("s_0:", s_0)
-            #print("theta_0:", theta_0)
-            #print("A:", A)
-            #print("tf.expand_dims(s,axis=0) - s_0:",tf.expand_dims(s,axis=0) - s_0)
-            #print("tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0):", tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0))
-            #print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1))
-            # At expansion point theta_prof = theta_0, which requires A = 0. Check this. But wait, A does not depend on signal?
-
-            # Analytically profile (find MLEs for) nuisance parameters, under quadratic log-likelihood approximation 
-            theta_prof = tf.expand_dims(theta_0 - A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0)
-            #theta_prof = theta_0 - tf.expand_dims(A,axis=1) - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # old shapes
-            #theta_prof = theta_0 - tf.linalg.matvec(tf.expand_dims(B,axis=1),tf.expand_dims(s,axis=0)-s_0) # Ignoring grad term
-
-            #print("theta_prof.shape:", theta_prof.shape)
+            # See test_jointdistribution (test_quad_prep) for explanation of how these shapes should work
+            Ashift = theta_0 - A
+            sdiff_shape = c.get_bcast_shape(s.shape,s_0.shape)
+            sdiff = tf.broadcast_to(s,sdiff_shape) - tf.broadcast_to(s_0,sdiff_shape)
+            Bvec = tf.linalg.matvec(B,sdiff)
+            theta_prof = Ashift - Bvec
             batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
 
             # de-stack analytically profiled nuisance parameters
             theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 
+
         return theta_prof_dict
  
     def _log_prob_quad(self,signal,samples,**kwargs):
@@ -871,20 +874,23 @@ class JointDistribution(tfd.JointDistributionNamed):
            parameters (for many samples) for a set of signal hypotheses"""
 
         # Get the profiled nuisance parameters under the Taylor expansion.
-        theta_prof_dict = self._nuisance_quad(signal,samples,**kwargs)
+        theta_prof_dict = self._nuisance_quad(signal,**kwargs)
 
         if theta_prof_dict is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
             # Note: there are some shape issues, though. When we use parameters that have been fitted to samples, those
             # fitted parameters have an extra 0 dimension, i.e. the sample dimension (one parameter for each sample). This
             # is missing when there are no nuisance parameters, so we need to add it.
-            expanded_pars = c.deep_expand_dims(c.convert_to_TF_variables(signal),axis=0)
+            #expanded_pars = c.deep_expand_dims(c.convert_to_TF_variables(signal),axis=0)
+            expanded_pars = c.convert_to_TF_constants(signal)
             # Compute -2*log_prob
+            print("expanded_pars:", expanded_pars)
             joint = JointDistribution(self.analyses.values(),expanded_pars)
         else:
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         batch_shape = self.bcast_batch_shape_tensor()
+        print("in _log_prob_quad: batch_shape = ",batch_shape)
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
         # This is a little confusing, but basically need to make the sample_shape+batch_shape for the sample
@@ -902,12 +908,13 @@ class JointDistribution(tfd.JointDistributionNamed):
         for i in range(n_new_dims):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
         log_prob = joint.log_prob(matched_samples)
-        #print("batch_shape:", batch_shape)
-        #print("s_batch_shape:", s_batch_shape)
-        #print("n_new_dims:", n_new_dims)
-        #print("samples:", samples)
-        #print("matched_samples:", matched_samples)
-        #print("q:", q)
+        print("batch_shape:", batch_shape)
+        print("event_shape:", event_shape)
+        print("s_batch_shape:", s_batch_shape)
+        print("n_new_dims:", n_new_dims)
+        print("samples:", samples)
+        print("matched_samples:", matched_samples)
+        print("log_prob:", log_prob)
         return log_prob #c.squeeze_to(q,2,dont_squeeze=[0])
 
     def bcast_batch_shape_tensor(self):

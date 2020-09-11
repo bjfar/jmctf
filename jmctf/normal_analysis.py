@@ -103,9 +103,12 @@ class NormalAnalysis(BaseAnalysis):
         return Asamples
 
     def get_observed_samples(self):
-        """Construct dictionary of observed data for this analysis"""
+        """Construct dictionary of observed data for this analysis
+           Shape should match the event_shape for the tensorflow model for
+           this analysis.
+        """
         Osamples = {}
-        Osamples["x"]       = tf.expand_dims(tf.expand_dims(tf.constant(self.x_obs,dtype=c.TFdtype),0),0)
+        Osamples["x"] = tf.constant(self.x_obs,dtype=c.TFdtype)
         return Osamples
 
     def interest_parameter_shapes(self):

@@ -228,15 +228,17 @@ class BinnedAnalysis(BaseAnalysis):
         return Asamples
 
     def get_observed_samples(self):
-        """Construct dictionary of observed data for this analysis"""
+        """Construct dictionary of observed data for this analysis
+           Shapes should match the event_shapes of the tensorflow model
+           for this analysis"""
         Osamples = {}
-        Osamples["n"] = tf.expand_dims(tf.expand_dims(tf.constant(self.SR_n,dtype=c.TFdtype),0),0)
+        Osamples["n"] = tf.constant(self.SR_n,dtype=c.TFdtype)
         if self.cov is not None:
-            Osamples["x_cov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(self.in_cov),dtype=c.TFdtype),0),0)
+            Osamples["x_cov"] = tf.constant([0]*np.sum(self.in_cov),dtype=c.TFdtype)
             if np.sum(~self.in_cov)>0:
-                Osamples["x_nocov"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*np.sum(~self.in_cov),dtype=c.TFdtype),0),0)
+                Osamples["x_nocov"] = tf.constant([0]*np.sum(~self.in_cov),dtype=c.TFdtype)
         else:
-            Osamples["x"] = tf.expand_dims(tf.expand_dims(tf.constant([0]*len(self.SR_names),dtype=c.TFdtype),0),0)
+            Osamples["x"] = tf.constant([0]*len(self.SR_names),dtype=c.TFdtype)
         return Osamples
 
     def interest_parameter_shapes(self):
