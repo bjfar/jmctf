@@ -837,10 +837,18 @@ class JointDistribution(tfd.JointDistributionNamed):
             # No nuisance parameters exist for this analysis! So no expansion to be done. 
             theta_prof_dict = None
         else:
+            # First we need to broadcast the "signal" batch shape against the expansion-point batch shape
             par_shapes = self.parameter_shapes()
-            s, s_bshape, s_names = c.cat_pars_to_tensor(parlist,par_shapes) 
-            s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest,par_shapes) # stacked interest parameter values at expansion point
-            theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes) # stacked nuisance parameter values at expansion point
+            batch_shape_1 = c.all_dist_batch_shape(parlist,par_shapes)
+            batch_shape_2 = c.all_dist_batch_shape(interest,par_shapes)
+            batch_shape = c.get_bcast_shape(batch_shape_1,batch_shape_2)
+            parlist_bcast = c.bcast_all_dist_batch_shape(parlist,par_shapes,batch_shape)
+            interest_bcast = c.bcast_all_dist_batch_shape(interest,par_shapes,batch_shape)
+
+            flatten = True # flattening needs to be undo to restore original signal batch shape
+            s, s_bshape, s_names = c.cat_pars_to_tensor(parlist_bcast,par_shapes,flatten) 
+            s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest_bcast,par_shapes,flatten) # stacked interest parameter values at expansion point
+            theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes,flatten) # stacked nuisance parameter values at expansion point
 
             print("s_bshape:", s_bshape)
             print("s0_bshape:", s0_bshape)
@@ -852,17 +860,15 @@ class JointDistribution(tfd.JointDistributionNamed):
             print("A.shape:", A.shape)
             print("B.shape:", B.shape)
 
-            print("tf.expand_dims(theta_0 - A,axis=1).shape",tf.expand_dims(theta_0 - A,axis=1).shape )
-            print("tf.expand_dims(B,axis=1).shape",          tf.expand_dims(B,axis=1).shape           )
-            print("(tf.expand_dims(s,axis=0)-s_0).shape",    (tf.expand_dims(s,axis=0)-s_0).shape     )
-
             # See test_jointdistribution (test_quad_prep) for explanation of how these shapes should work
             Ashift = theta_0 - A
-            sdiff_shape = c.get_bcast_shape(s.shape,s_0.shape)
-            sdiff = tf.broadcast_to(s,sdiff_shape) - tf.broadcast_to(s_0,sdiff_shape)
+            #sdiff_shape = c.get_bcast_shape(s.shape,s_0.shape) # This is redundant I should think...
+            #sdiff = tf.broadcast_to(s,sdiff_shape) - tf.broadcast_to(s_0,sdiff_shape)
+            sdiff = s - s_0
             Bvec = tf.linalg.matvec(B,sdiff)
             theta_prof = Ashift - Bvec
-            batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
+            #batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
+            # ^^^ now have a more general method for restoring batch shape
 
             # de-stack analytically profiled nuisance parameters
             theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 

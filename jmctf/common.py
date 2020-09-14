@@ -402,7 +402,7 @@ def get_bcast_shape(shape1,shape2,numpy_bcast=True):
         elif sv==1:
             newshape[i] = si
         else:
-            msg = "Shapes are not compatible! Different sized dimensions (other than size 1) were found! (found {0} vs {1}, where (at least) dim {3} are not compatible".format(shape1,shape2,i)
+            msg = "Shapes are not compatible! Different sized dimensions (other than size 1) were found! (found {0} vs {1}, where (at least) dim {2} are not compatible".format(shape1,shape2,i)
             raise ValueError(msg)
     if -1 in newshape:
         msg = "Failed to broadcast shapes! -1 detected! (shape1 = {0}, shape2={1}, newshape = {2})".format(shape1,shape2,newshape)
@@ -611,6 +611,22 @@ def dist_batch_shape(parameters,parameter_shapes):
                 raise ValueError(msg) from e
     return batch_shape   
 
+def all_dist_batch_shape(parameters,parameter_shapes):
+    """As dist_batch_shape but descends through an extra layer of dictionarieS (just one, the "analysis" level)"""
+    batch_shape = None
+    for ka,pars in parameters.items():
+        this_batch_shape = dist_batch_shape(pars,parameter_shapes[ka])
+        if batch_shape is None: 
+            batch_shape = this_batch_shape
+        else:
+            try:
+                batch_shape = get_bcast_shape(batch_shape,this_batch_shape)
+            except ValueError as e:
+                msg = "Could not obtain all_dist_batch_shape for the provided parameters! The inferred batch shapes for all parameters could not be broadcast to a single consistent shape! Failure occured broadcasting parameters from analysis {0} with batch shape {1} to previous largest batch shape {2}".format(ka,this_batch_shape,batch_shape)
+                raise ValueError(msg) from e
+    return batch_shape
+
+
 def bcast_sample_batch_shape(samples,event_shapes,new_batch_shape):
     """Take 'samples' and broadcast them all against a second batch shape"""
     out = {}
@@ -629,6 +645,11 @@ def bcast_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
         pshape = parameter_shapes[name]
         new_shape = [d for d in get_bcast_shape(current_batch_shape,new_batch_shape)] + [d for d in pshape]
         out[name] = tf.broadcast_to(p,new_shape)
+    return out
+
+def bcast_all_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
+    """As bcast_dist_batch_shape, but applies over 'analysis' level of parameter dictionaries"""
+    out = {ka: bcast_dist_batch_shape(pars,parameter_shapes[ka],new_batch_shape) for ka,pars in parameters.items()}
     return out
 
 def loose_squeeze(tensor,axis):

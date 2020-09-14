@@ -58,9 +58,18 @@ class BaseAnalysis:
 
         # Infer sample+batch_shape from samples
         sample_batch_shape = c.sample_batch_shape(samples,self.event_shapes())
-               
-        # Attempt to broadcast these shapes together
-        final_batch_shape = c.get_bcast_shape(dist_batch_shape,sample_batch_shape)
+              
+        #print("samples",samples)
+        #print("sample_batch_shape:",sample_batch_shape)
+        #print("parameters:",parameters)
+        #print("dist_batch_shape:",dist_batch_shape)
+
+        try:
+            # Attempt to broadcast these shapes together
+            final_batch_shape = c.get_bcast_shape(dist_batch_shape,sample_batch_shape)
+        except ValueError as e:
+            msg = "Failed to broadcast batch shapes for samples ({0}) against the batch shape for the distribution ({1}, inferred from input parameter shapes). The broadcasting rules for these follow the 'log_prob' evaluation rules defined by tensorflow_probabilty, please ensure your input parameters and samples are broadcastable by those rules.".format(sample_batch_shape,dist_batch_shape)
+            raise ValueError(msg) from e
 
         # Broadcast both the parameters and samples to this inferred batch shape
         out_samples = c.bcast_sample_batch_shape(samples,self.event_shapes(),final_batch_shape)
