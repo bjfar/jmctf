@@ -587,6 +587,10 @@ class JointDistribution(tfd.JointDistributionNamed):
 
            Parameters should be those already known internally to this
            JointDistribution.
+
+           Output shape will be (batch_dims,N,N), where N is the number of
+           scalar parameters in the joint distribution (i.e. after parameter
+           flattening)
         """
 
         # Check batch shapes associated with internal probability models
@@ -615,6 +619,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         # matrix manipulations
         par_shapes = self.parameter_shapes()
         all_input_pars, bcast_batch_shape, column_names = c.cat_pars_to_tensor(free_pars,par_shapes)
+        npars = len(column_names)
 
         if bcast_batch_shape != batch_shape:
             msg = "Broadcasted batch shape inferred while stacking parameters into tensor did not match batch shape inferred from underlying distribution objects! This is a bug, if there is a problem with the input parameters it should have been detected before this."
@@ -669,8 +674,12 @@ class JointDistribution(tfd.JointDistributionNamed):
         # grads_out = c.squeeze_to(grads,d=2,dont_squeeze=[0])
         # print("g_out:",grads_out)
         # print("H_out:",hessians_out)
-        hessians_out = hessians
-        grads_out = grads
+
+        # Reshape to restore the batch dimensions
+        h_out_shape = [d for d in batch_shape] + [npars,npars]
+        g_out_shape = [d for d in batch_shape] + [npars]
+        hessians_out = tf.reshape(hessians,h_out_shape)
+        grads_out = tf.reshape(grads,g_out_shape)
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):
@@ -841,13 +850,16 @@ class JointDistribution(tfd.JointDistributionNamed):
             par_shapes = self.parameter_shapes()
             batch_shape_1 = c.all_dist_batch_shape(parlist,par_shapes)
             batch_shape_2 = c.all_dist_batch_shape(interest,par_shapes)
-            batch_shape = c.get_bcast_shape(batch_shape_1,batch_shape_2)
-            parlist_bcast = c.bcast_all_dist_batch_shape(parlist,par_shapes,batch_shape)
-            interest_bcast = c.bcast_all_dist_batch_shape(interest,par_shapes,batch_shape)
+            batch_shape_3 = c.all_dist_batch_shape(nuisance,par_shapes)
+            batch_shape_4 = c.get_bcast_shape(batch_shape_1,batch_shape_2)
+            batch_shape = c.get_bcast_shape(batch_shape_3,batch_shape_4)
+            #parlist_bcast = c.bcast_all_dist_batch_shape(parlist,par_shapes,batch_shape)
+            #interest_bcast = c.bcast_all_dist_batch_shape(interest,par_shapes,batch_shape)
+            #nuisance_bcast = c.bcast_all_dist_batch_shape(nuisance,par_shapes,batch_shape)
 
-            flatten = True # flattening needs to be undo to restore original signal batch shape
-            s, s_bshape, s_names = c.cat_pars_to_tensor(parlist_bcast,par_shapes,flatten) 
-            s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest_bcast,par_shapes,flatten) # stacked interest parameter values at expansion point
+            flatten = False # If flattening then need to undo it to restore original signal batch shape
+            s, s_bshape, s_names = c.cat_pars_to_tensor(parlist,par_shapes,flatten) 
+            s_0, s0_bshape, s0_names = c.cat_pars_to_tensor(interest,par_shapes,flatten) # stacked interest parameter values at expansion point
             theta_0, t0_bshape, t0_names = c.cat_pars_to_tensor(nuisance,par_shapes,flatten) # stacked nuisance parameter values at expansion point
 
             print("s_bshape:", s_bshape)

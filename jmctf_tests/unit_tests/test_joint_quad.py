@@ -54,15 +54,33 @@ def test_plot_quad_logl(analysis,pars,samples):
     print("pars_batch:", pars_batch)
 
     # The 'quad' log_prob, expanding about every nuisance BF point for every hypothesis (i.e. NOT what is done in lee-correction)
+    # So the following happens:
+    # 1. (2,20) shape nuisance parameter fits obtained (2 samples * 20 hypotheses, broadcast against each other)
+    #    These become the expansion points in the log_prob_quad evaluation
+    # 2. (2,1) shaped samples are provided to create the log_prob_quad_f function
+    # 3. (1,20) parameters are provided for log-likelihood evaluation
+    #    These are the same parameters used as input to the fits, so should cause evaluation to occur exactly at the expansion points
+    # 4. Result has shape (2,20)
     f = joint_fitted_nuisance.log_prob_quad_f(samples_batch)
     log_prob_quad = f(pars_batch) #fitted_pars_nuisance['fixed']) # the 'fixed' parameters include the 'signal' ones (EDIT: can just use pars_batch, same thing)
 
-    # The 'quad' log_prob, expanding just once about the global BF point amongst input hypotheses, per sample (i.e. what IS done in lee-correction)
-    
-    #joint_fitted_nuisance
 
+    # The 'quad' log_prob, expanding just once about the global BF point amongst input hypotheses, per sample (i.e. what IS done in lee-correction, more or less. Actually we use a null-hypothesis point rather than the BF, but the point is there is just one expansion point per sample)
+    # So the following happens:
+    # 1. (2,1) shape nuisance parameter fits obtained (2 samples * 1 hypothesis)
+    #    These become the expansion points in the log_prob_quad evaluation
+    # 2. (2,1) shaped samples are provided to create the log_prob_quad_f function
+    # 3. (1,20) parameters are provided for log-likelihood evaluation
+    #    These are DIFFERENT parameters to those used input to the fits, so should cause more non-trivial evaluation of the log_prob_quad
+    #    function to occur. Results will be less accurate of course, but this is the "real-world" use case. Will make plots to check accuracy.
+    log_prob_g, joint_fitted_all, fitted_pars_all = joint.fit_all(samples_batch)
+    print("log_prob_g:", log_prob_g)
+    print("fitted_pars_all['fitted']:", fitted_pars_all['fitted'])
+    print("fitted_pars_all['fixed']:", fitted_pars_all['fixed'])
 
-    print("log_prob:", log_prob)
-    print("log_prob_quad (re-fit):", log_prob_quad)
+    f2 = joint_fitted_all.log_prob_quad_f(samples_batch)
+    log_prob_quad_2 = f2(pars_batch)
+
+    print("log_prob_quad_2 (expanded from BF points):", log_prob_quad_2)
     #print("log_prob_quad (global BF expansion):"
     assert False
