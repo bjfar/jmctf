@@ -31,7 +31,7 @@ def get_hypothesis_curves():
        with sufficient density to plot reasonably smooth log-likelihood curves.
        Returns a dict, in case multiple curves in different directions needed.
        (keys used to name output tests/plots)"""
-    pars = {'mu': tf.constant(np.linspace(0,10,20),dtype=c.TFdtype),
+    pars = {'mu': tf.constant(np.linspace(0,3,20),dtype=c.TFdtype),
             'theta': tf.constant(0.,dtype=c.TFdtype),
             'sigma_t': tf.constant(1.,dtype=c.TFdtype)} # Currently 0 doesn't work due to divide by zero
     return {"mu": pars}

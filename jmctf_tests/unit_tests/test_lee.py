@@ -9,7 +9,7 @@ from tensorflow_probability import distributions as tfd
 import jmctf.common as c
 from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists, analysis_tests
-from jmctf.LEE import LEECorrectorMaster
+from jmctf.lee import LEECorrectorMaster
 
 N = 10 # Number of samples to generate in tests
 

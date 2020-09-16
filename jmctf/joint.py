@@ -11,6 +11,8 @@ import functools
 import massminimize as mm
 from . import common as c
 
+import traceback
+
 #tmp
 id_only = False
 
@@ -299,7 +301,13 @@ class JointDistribution(tfd.JointDistributionNamed):
                     msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
                     raise ValueError(msg)
             self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
-            #print("self.pars:", c.print_with_id(self.pars,id_only))
+            print("JointDistribution constructor: self.pars:", c.print_with_id(self.pars,id_only))
+
+            #-----------
+            # Manually print call stack to see who created this object
+            traceback.print_stack()
+            #-----------
+
             dists = {} 
             self.Asamples = {}
             for a in self.analyses.values():
@@ -533,7 +541,7 @@ class JointDistribution(tfd.JointDistributionNamed):
     #    joint_fitted, q = optimize(pars,None,self.analyses,samples,pre_scaled_pars='nuis',transform=mu_to_sig,log_tag=log_tag,verbose=verbose)
     #    return q, joint_fitted, pars
   
-    def fit_all(self,samples,fixed_pars={},log_tag='',verbose=False,force_numeric=False):
+    def fit_all(self,samples,fixed_pars=None,log_tag='',verbose=False,force_numeric=False):
         """Fit all signal and nuisance parameters to samples
            (ignores parameters that were used to construct this object)
            Some special parameters within analyses are also flagged as
@@ -545,6 +553,9 @@ class JointDistribution(tfd.JointDistributionNamed):
            If force_numeric is True then asserted 'exactness' of starting guesses
            is ignored and numerical optimisation is run regardless.
         """
+        if fixed_pars is None:
+            fixed_pars = self.pars # Assume any extra fixed parameters were provided at construction time. If missing defaults will be used.
+
         # Make sure the samples are TensorFlow objects of the right type:
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
         fp = c.convert_to_TF_constants(fixed_pars)
@@ -572,7 +583,8 @@ class JointDistribution(tfd.JointDistributionNamed):
 
 
     def Hessian(self,samples):
-        """Obtain Hessian matrix (and grad) at input parameter points
+        """Obtain Hessian matrix (and grad) of the log_prob function at 
+           input parameter points
            Make sure to use de-scaled parameters as input!
 
            Shape requirements: 
@@ -601,6 +613,8 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         # Make sure to use non-scaled parameters to get correct gradients etc.
         pars = self.get_pars()
+
+        print("self.pars:", pars)
 
         # Separate "const" parameters
         free_pars = {}
@@ -635,8 +649,9 @@ class JointDistribution(tfd.JointDistributionNamed):
                 # Avoids confusion about parameters getting copied and
                 # breaking TF graph connections etc.
                 #print("samples:", samples)
-                #print("free_pars:", free_pars)
-                #print("input_pars:", input_pars)
+                print("free_pars:", free_pars)
+                print("input_pars:", input_pars)
+                print("const_pars:", const_pars)
                 #print("catted_pars:", catted_pars)
                 inpars = c.decat_tensor_to_pars(input_pars,free_pars,par_shapes,batch_shape) # need to unstack for use in each analysis
          
@@ -648,10 +663,10 @@ class JointDistribution(tfd.JointDistributionNamed):
                 for a in self.analyses.values():
                     d = c.add_prefix(a.name,a.tensorflow_model(scaled_inpars[a.name])) 
                     for dist_name, dist in d.items():
-                        #print("x[{0}]:".format(dist_name), samples[dist_name])
-                        #print("dist {0} description: {1}".format(dist_name,dist))
-                        q += -2*dist.log_prob(samples[dist_name])
-                #print("q:", q)
+                        print("x[{0}]:".format(dist_name), samples[dist_name])
+                        print("dist {0} description: {1}".format(dist_name,dist))
+                        q += dist.log_prob(samples[dist_name])
+                print("q:", q)
             grads = tape.gradient(q, input_pars) #[0]
             #grads = tape.jacobian(q, catted_pars)
             #grads = tape.batch_jacobian(q, catted_pars)
@@ -660,13 +675,14 @@ class JointDistribution(tfd.JointDistributionNamed):
             #print("all_inpars:", all_inpars)
             # print("scaled_inpars:", scaled_inpars)
             # print("catted_pars:", catted_pars)
-            #print("q:", q)
-            #print("grads:", grads)
+            print("input_pars:", input_pars)
+            print("q:", q)
+            print("grads:", grads)
         # Compute Hessians. batch_jacobian takes first (the sample) dimensions as independent for much better efficiency,
         hessians = tape_outer.batch_jacobian(grads, input_pars) 
         #...but we are only allowing one sample anyway, so can just do normal jacobian
         #hessian = tape_outer.jacobian(grads, input_pars)
-        #print("H:",hessians)
+        print("H:",hessians)
 
         # # If Hessian (or grad) dimension is too large (due to extra singleton dimensions in either the samples or the
         # # input parameters) then squeeze them out until we get to the right shape.
@@ -767,8 +783,8 @@ class JointDistribution(tfd.JointDistributionNamed):
            parameters, under this approximation."""
         #print("Computing Hessian and various matrix operations for all samples...")
         H, g = self.Hessian(samples)
-        #print("H:", H)
-        #print("g:", g) # Should be close to zero if fits worked correctly
+        print("H:", H)
+        print("g:", g) # Should be close to zero if fits worked correctly
         pars = self.get_pars() # This is what Hessian uses internally
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
         #print("self.pars:", self.pars)
@@ -787,12 +803,15 @@ class JointDistribution(tfd.JointDistributionNamed):
             B = None
         else:
             Hnn_inv = tf.linalg.inv(Hnn)
+            print("Hin:", Hin)
+            print("Hnn:", Hnn)
+            print("Hnn_inv:", Hnn_inv)
             gn = self.sub_grad(g,nuisance_i)
             #print("gn:", gn)
             # Hmm, gn should always be zero if we maximised the logL w.r.t. the nuisance parameters at the expansion point? Should be at a maxima in that direction?
             #gn *= 0. # Test effect of enforcing this
             A = tf.linalg.matvec(Hnn_inv,gn)
-            B = tf.linalg.matmul(Hnn_inv,Hin) #,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
+            B = tf.linalg.matmul(Hnn_inv,Hin,transpose_b=True) # TODO: Not sure if transpose needed here. Doesn't seem to make a difference, which seems a little odd.
         #print("...done!")
         #print("A:", A)
         #print("B:", B)

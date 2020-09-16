@@ -12,11 +12,13 @@ import jmctf.common as c
 from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists, get_hypothesis_curves
 
+import matplotlib.pyplot as plt
+
 # Common fixtures for common test setup tasks
 from jmctf_tests.common_fixtures import analysis, pars, pars0, joint0, samples, joint_fitted_nuisance_log_prob_pars, joint_fitted_nuisance, fitted_log_prob, fitted_pars, hessian, internal_pars,  decomposed_parameters, decomposed_hessian, quad_prep, quad_f
 
 
-has_surface = ["NormalTEAnalysis"]
+has_curve = ["NormalTEAnalysis"]
 
 # Number of samples to draw during tests
 N = 2 # Doing plotting, so don't want tonnes of curves confusing things
@@ -24,17 +26,33 @@ N = 2 # Doing plotting, so don't want tonnes of curves confusing things
 def Nsamples():
     return N
 
-pars_id = [(get_obj(name), curve, name+"_"+ID) for name in has_surface for ID,curve in get_hypothesis_curves(name).items()]
-params = [x[0:2] for x in pars_id]
-ids = [x[2] for x in pars_id]
+pars_id = [(get_obj(name), ID, curve, name+"_"+ID) for name in has_curve for ID,curve in get_hypothesis_curves(name).items()]
+params = [x[0:3] for x in pars_id] # analysis and curve data
+ids = [x[3] for x in pars_id]
 
 # "Entry point" fixture providing the analysis objects and parameters for them.
 @pytest.fixture(scope="module",params=params,ids=ids)
-def analysis_params(request):
-    analysis, params = request.param
+def analysis_ID_params(request):
+    analysis, IDpar, params = request.param
+    return analysis, IDpar, params
+
+@pytest.fixture(scope="module")
+def analysis_params(analysis_ID_params):
+    analysis, IDpar, params = analysis_ID_params
     return analysis, params
 
-def test_plot_quad_logl(analysis,pars,samples):
+# The parameter that varies for the test curve
+@pytest.fixture(scope="module")
+def curve_par(analysis_ID_params):
+    analysis, IDpar, params = analysis_ID_params
+    return IDpar
+
+# The name of the current test
+@pytest.fixture(scope="module")
+def test_name(request):
+    return request.node.name
+
+def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     """Create plots of test logl curves, comparing direct fits with 'quad' versions"""
     print("pars:", pars)
     print("samples:", samples)
@@ -83,4 +101,30 @@ def test_plot_quad_logl(analysis,pars,samples):
 
     print("log_prob_quad_2 (expanded from BF points):", log_prob_quad_2)
     #print("log_prob_quad (global BF expansion):"
-    assert False
+
+    # Ok let's make some plots!
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    
+    # Plot curve for each sample (0th axis of batch)
+    x = pars[analysis.name][curve_par]
+    first = True
+    for y, y_quad_1, y_quad_2 in zip(log_prob,log_prob_quad,log_prob_quad_2):
+        if first:
+            ax.plot(x,y,c='k',label="Full numerical profiling")
+            ax.plot(x,y_quad_1,c='g',ls='--',label="\"quad\" expansion at profiled points (i.e. no real expansion done)")
+            ax.plot(x,y_quad_2,c='r',ls='--',label="\"quad\" expansion around single global best fit per sample")
+            first = False
+        else:
+            # No labels this time
+            ax.plot(x,y,c='k')
+            ax.plot(x,y_quad_1,c='g',ls='--')
+            ax.plot(x,y_quad_2,c='r',ls='--')
+ 
+    ax.set_ylabel("log_prob")
+    ax.set_xlabel("curve_par")
+    ax.set_title("log_prob_quad curve test for analysis {0}, parameter {1}".format(analysis.name, curve_par))
+    ax.legend(loc=0, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
+    plt.tight_layout()
+    fig.savefig("unit_test_output/log_prob_quad_comparison_{0}.png".format(test_name))
