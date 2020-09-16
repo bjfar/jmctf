@@ -1,5 +1,6 @@
 """Unit tests for BinnedAnalysis class"""
 
+import numpy as np
 import tensorflow as tf
 import jmctf.common as c
 from jmctf.binned_analysis import BinnedAnalysis
@@ -28,6 +29,19 @@ def get_three_hypotheses():
                                   (0.,0.)],dtype=c.TFdtype)
             }
     return pars
+
+def get_hypothesis_curves():
+    """Curves of hypotheses that should almost always encompass the best-fit point
+       with sufficient density to plot reasonably smooth log-likelihood curves.
+       Returns a dict, in case multiple curves in different directions needed.
+       (keys used to name output tests/plots)"""
+    sr1 = np.linspace(0,20,20)
+    sr2 = 55*np.ones(20)
+    s = np.vstack([sr1,sr2]).T
+    pars = {'s': tf.constant(s,dtype=c.TFdtype),
+            'theta': tf.constant(0.,dtype=c.TFdtype)}
+    return {("s",0): pars} # tuple indicates index of multivariate parameter to be used
+
 # -------------------------------------------------------
 
 def get_model():

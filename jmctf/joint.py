@@ -301,11 +301,11 @@ class JointDistribution(tfd.JointDistributionNamed):
                     msg = "NaNs detected in input parameter arrays for JointDistribution! Parameter arrays containing NaNs were:{0}".format(nanpar)
                     raise ValueError(msg)
             self.pars = self.prepare_pars(pars_tf,pre_scaled_pars)
-            print("JointDistribution constructor: self.pars:", c.print_with_id(self.pars,id_only))
+            #print("JointDistribution constructor: self.pars:", c.print_with_id(self.pars,id_only))
 
             #-----------
             # Manually print call stack to see who created this object
-            traceback.print_stack()
+            #traceback.print_stack()
             #-----------
 
             dists = {} 

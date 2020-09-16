@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from jmctf_tests.common_fixtures import analysis, pars, pars0, joint0, samples, joint_fitted_nuisance_log_prob_pars, joint_fitted_nuisance, fitted_log_prob, fitted_pars, hessian, internal_pars,  decomposed_parameters, decomposed_hessian, quad_prep, quad_f
 
 
-has_curve = ["NormalTEAnalysis"]
+has_curve = ["NormalAnalysis","NormalTEAnalysis","BinnedAnalysis_single","BinnedAnalysis"]
 
 # Number of samples to draw during tests
 N = 2 # Doing plotting, so don't want tonnes of curves confusing things
@@ -26,7 +26,7 @@ N = 2 # Doing plotting, so don't want tonnes of curves confusing things
 def Nsamples():
     return N
 
-pars_id = [(get_obj(name), ID, curve, name+"_"+ID) for name in has_curve for ID,curve in get_hypothesis_curves(name).items()]
+pars_id = [(get_obj(name), ID, curve, "{0}_{1}".format(name,ID)) for name in has_curve for ID,curve in get_hypothesis_curves(name).items()]
 params = [x[0:3] for x in pars_id] # analysis and curve data
 ids = [x[3] for x in pars_id]
 
@@ -48,7 +48,7 @@ def curve_par(analysis_ID_params):
     return IDpar
 
 # The name of the current test
-@pytest.fixture(scope="module")
+@pytest.fixture
 def test_name(request):
     return request.node.name
 
@@ -108,7 +108,20 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     ax = fig.add_subplot(111)
     
     # Plot curve for each sample (0th axis of batch)
-    x = pars[analysis.name][curve_par]
+    if isinstance(curve_par, str):
+        cpar, index = (curve_par, None)
+    else:
+        try: 
+            cpar, index = curve_par
+        except ValueError as e:
+            msg = "Failed to interpret curve 'parameter' specification! Needs to be either a string, or a (string,index) tuple indicating which parameter (and which index if multivariate) is the one that varies for this test!"
+            raise ValueError(msg) from e
+ 
+    if index is None:
+        x = pars[analysis.name][cpar]
+    else:
+        x = pars[analysis.name][cpar][:,index]
+
     first = True
     for y, y_quad_1, y_quad_2 in zip(log_prob,log_prob_quad,log_prob_quad_2):
         if first:
@@ -123,7 +136,7 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
             ax.plot(x,y_quad_2,c='r',ls='--')
  
     ax.set_ylabel("log_prob")
-    ax.set_xlabel("curve_par")
+    ax.set_xlabel(curve_par)
     ax.set_title("log_prob_quad curve test for analysis {0}, parameter {1}".format(analysis.name, curve_par))
     ax.legend(loc=0, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
     plt.tight_layout()
