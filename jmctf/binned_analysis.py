@@ -58,7 +58,7 @@ class BinnedAnalysis(BaseAnalysis):
             self.exact_MLEs = False
         else:
             # Let driver classes know that we can analytically provide exact MLEs, so no numerical fitting is needed.
-            self.exact_MLEs = False
+            self.exact_MLEs = True
 
         if verify: self.verify() # Set this flag zero for "manual" data input
         # Mega-simple bin-by-bin significance estimate, for cross-checking
@@ -586,5 +586,45 @@ class BinnedAnalysis(BaseAnalysis):
             nnans = np.sum(~np.isfinite(theta_MLE))
             if nnans>0: print("Warning! {0} NaNs left in seeds!".format(nnans))
             seeds[sr]['theta'] = theta_MLE #/ self.theta_scaling[i] # Scaled by bsys to try and normalise variables in the fit. Input variables are scaled the same way.
+
+            # DEBUGGING
+            # Hessian cross-check (no covariance case)
+            # d2logp_ds2_i = - k_i / lambda_i^2
+            # d2logp_dtheta2_i = - 1 / sigma_theta_i^2 - k_i / lambda_i^2
+            # d2logp_ds_idtheta_i = - k_i / lambda_i^2
+
+            print("Hessian cross-check for binned_analysis")
+            k_i = n
+            lambda_i = s + b + theta_MLE
+            sigma_theta_i = bsys
+            print("k_i:", k_i)
+            print("x_i:", x)
+            print("s_i:", s)
+            print("b_i:", b)
+            print("theta_i_MLE:", theta_MLE)
+            print("lambda_i:", lambda_i)
+            print("sigma_theta_i:", sigma_theta_i)
+            dlogp_ds_i = k_i / lambda_i - 1
+            dlogp_dtheta_i = (x - theta_MLE) / sigma_theta_i**2 + k_i / lambda_i - 1
+            print("Grad components:")
+            print("dlogp_ds_i:", dlogp_ds_i)
+            print("dlogp_dtheta_i:", dlogp_dtheta_i)
+            d2logp_ds2_i = - k_i / lambda_i**2
+            d2logp_dtheta2_i = - 1 / sigma_theta_i**2 - k_i / lambda_i**2
+            d2logp_ds_idtheta_i = - k_i / lambda_i**2
+            print("Hessian components:")
+            print("d2logp_ds2_i:",        d2logp_ds2_i)     
+            print("d2logp_dtheta2_i:",    d2logp_dtheta2_i) 
+            print("d2logp_ds_idtheta_i:", d2logp_ds_idtheta_i)
+
+            print("Inverses (just 1/element for single parameter case)")
+            print("1/d2logp_ds2_i:",        1./d2logp_ds2_i)     
+            print("1/d2logp_dtheta2_i:",    1./d2logp_dtheta2_i) 
+            print("1/d2logp_ds_idtheta_i:", 1./d2logp_ds_idtheta_i)
+
+            print("B = ", (1./d2logp_dtheta2_i) * d2logp_ds_idtheta_i) 
+            print("A = ", (1./d2logp_dtheta2_i) * dlogp_dtheta_i)
+            
+
         #print("seeds:", seeds)
         return seeds

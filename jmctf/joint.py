@@ -60,8 +60,9 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     """General -2logL function to optimise
        TODO: parameter 'transform' feature not currently in use, probably doesn't work correctly
     """
-    #print("In neg2logL:")
-    #print("In neg2logL: pars (scaled) = ", pars)
+    print("In neg2logL:")
+    print("In neg2logL: pars (scaled) = ", pars)
+    print("In neg2logL: const_pars (scaled) = ", const_pars)
     #print("pars:", c.print_with_id(pars,id_only))
     #print("const_pars:", c.print_with_id(const_pars,id_only))
     if transform is not None:
@@ -112,6 +113,9 @@ def neg2logL(pars,const_pars,analyses,data,transform=None):
     #     msg = "NaNs detect in result of neg2logL calculation! Please check that your input parameters are valid for the distributions you are investigating, and that the fit is stable! Components of the joint distribution whose log_prob contained nans were:" + nan_components
     #     raise ValueError(msg)
     total_loss = tf.math.reduce_sum(q)
+    print("all_pars:", all_pars)
+    print("joint.descale_pars(all_pars):", joint.descale_pars(all_pars))
+    #quit()
     return total_loss, q, joint.descale_pars(all_pars), None
 
 def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=False,force_numerical=False):
@@ -235,7 +239,7 @@ def optimize(pars,const_pars,analyses,data,transform=None,log_tag='',verbose=Fal
     final_free_pars = {ak: {p: final_pars[ak][p] for p in av.keys()} for ak,av in pars.items()}
     final_const_pars = {ak: {p: final_pars[ak][p] for p in av.keys() if p not in pars.get(ak,{}).keys()} for ak,av in const_pars.items()}
  
-    #print("final_pars:", final_pars)
+    print("final_pars:", final_pars)
     #print("pars:", pars)
     #print("final_free_pars:", final_free_pars)
     #print("const_pars:", const_pars)
@@ -447,7 +451,8 @@ class JointDistribution(tfd.JointDistributionNamed):
                 raise ValueError(msg)
             # Get samples and parameters for this analysis and broadcast them against each other
             bcast_pars, bcast_samples = a.bcast_parameters_samples(fixed_pars[a.name],self.get_samples_for(a.name,samples))
-            p, fp = a.get_nuisance_parameters(bcast_samples,bcast_pars) # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
+            p, fp = a.get_nuisance_parameters(bcast_samples,bcast_pars)
+            # Apply scaling to all parameters, so that scan occurs in ~unit scale parameter space
             pars[a.name] = a.scale_pars(p)
             all_fixed_pars[a.name] = a.scale_pars(fp)
         #print("pars:", c.print_with_id(pars,id_only))
@@ -499,9 +504,11 @@ class JointDistribution(tfd.JointDistributionNamed):
            If force_numeric is True then asserted 'exactness' of starting guesses
            is ignored and numerical optimisation is run regardless."""
         if fixed_pars is None:
-            fixed_pars = self.pars # Assume hypotheses provided at construction time
+            fixed_pars = self.get_pars() # Assume hypotheses provided at construction time (but need de-scaled parameters here!)
         fp = c.convert_to_TF_constants(fixed_pars)
         all_nuis_pars, all_fixed_pars = self.get_nuis_parameters(samples,fp)
+        print("all_nuis_pars:", all_nuis_pars)
+        print("all_fixed_pars:", all_fixed_pars)
 
         # Note, parameters obtained from get_nuis_parameters, and passed to
         # the 'optimize' function, are SCALED. All of them, regardless of whether
@@ -554,7 +561,7 @@ class JointDistribution(tfd.JointDistributionNamed):
            is ignored and numerical optimisation is run regardless.
         """
         if fixed_pars is None:
-            fixed_pars = self.pars # Assume any extra fixed parameters were provided at construction time. If missing defaults will be used.
+            fixed_pars = self.get_pars() # Assume any extra fixed parameters were provided at construction time. If missing defaults will be used.
 
         # Make sure the samples are TensorFlow objects of the right type:
         samples = {k: tf.constant(x,dtype="float32") for k,x in samples.items()}
@@ -634,6 +641,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         par_shapes = self.parameter_shapes()
         all_input_pars, bcast_batch_shape, column_names = c.cat_pars_to_tensor(free_pars,par_shapes)
         npars = len(column_names)
+        print("pars:",pars)
+        print("column_names:", column_names)
 
         if bcast_batch_shape != batch_shape:
             msg = "Broadcasted batch shape inferred while stacking parameters into tensor did not match batch shape inferred from underlying distribution objects! This is a bug, if there is a problem with the input parameters it should have been detected before this."
@@ -671,8 +680,8 @@ class JointDistribution(tfd.JointDistributionNamed):
             #grads = tape.jacobian(q, catted_pars)
             #grads = tape.batch_jacobian(q, catted_pars)
             #grads = tape.hessians(q, catted_pars)
-            #print("samples:", samples)
-            #print("all_inpars:", all_inpars)
+            print("samples:", samples)
+            print("all_inpars:", all_inpars)
             # print("scaled_inpars:", scaled_inpars)
             # print("catted_pars:", catted_pars)
             print("input_pars:", input_pars)
@@ -696,6 +705,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         g_out_shape = [d for d in batch_shape] + [npars]
         hessians_out = tf.reshape(hessians,h_out_shape)
         grads_out = tf.reshape(grads,g_out_shape)
+
+        print("hessians_out:", hessians_out)
+        print("grads_out:", grads_out)
         return hessians_out, grads_out
 
     def decomposed_parameters(self,pars):
@@ -708,7 +720,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         interest_p = {} # parameters themselves
         nuisance_p = {} 
         i = 0
-        for ka,a in pars.items():
+        print("Decomposition order:")
+        for ka,a in pars.items(): # Hessian should be ordered according to this parameter dictionary!
             interest_p[ka] = {}
             nuisance_p[ka] = {}
             interest_i[ka] = {}
@@ -718,10 +731,12 @@ class JointDistribution(tfd.JointDistributionNamed):
                     N = c.prod(nuisance[ka][kp]) or 1
                     nuisance_p[ka][kp] = p
                     nuisance_i[ka][kp] = (i, N)
+                    print("   {0}::{1} (nuisance)".format(ka,kp))
                 elif kp in interest[ka].keys():
                     N = c.prod(interest[ka][kp]) or 1
                     interest_p[ka][kp] = p
                     interest_i[ka][kp] = (i, N)
+                    print("   {0}::{1} (interest)".format(ka,kp))
                 elif kp in fixed[ka].keys():
                     # Ignore the fixed parameters, they are bystanders in the Hessian calculation
                     N = 0
@@ -786,8 +801,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         print("H:", H)
         print("g:", g) # Should be close to zero if fits worked correctly
         pars = self.get_pars() # This is what Hessian uses internally
+        print("pars:", pars)
+        print("self.pars:", self.pars)
         interest_i, interest_p, nuisance_i, nuisance_p = self.decomposed_parameters(pars)
-        #print("self.pars:", self.pars)
         #print("descaled_pars:", pars)
         #print("samples:", samples)
         #print("interest_p:", interest_p)
@@ -795,6 +811,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("interest_i:", interest_i)
         #print("nuisance_i:", nuisance_i)
         Hii, Hnn, Hin = self.decompose_Hessian(H,interest_i,nuisance_i)
+
         #print("Hii:", Hii)
         print("Hnn.shape:", Hnn.shape if Hnn is not None else None)
         print("Hin.shape:", Hin.shape if Hin is not None else None)
@@ -803,11 +820,12 @@ class JointDistribution(tfd.JointDistributionNamed):
             B = None
         else:
             Hnn_inv = tf.linalg.inv(Hnn)
+            print("Hii:", Hii)
             print("Hin:", Hin)
             print("Hnn:", Hnn)
             print("Hnn_inv:", Hnn_inv)
             gn = self.sub_grad(g,nuisance_i)
-            #print("gn:", gn)
+            print("gn:", gn)
             # Hmm, gn should always be zero if we maximised the logL w.r.t. the nuisance parameters at the expansion point? Should be at a maxima in that direction?
             #gn *= 0. # Test effect of enforcing this
             A = tf.linalg.matvec(Hnn_inv,gn)
@@ -816,6 +834,8 @@ class JointDistribution(tfd.JointDistributionNamed):
         #print("A:", A)
         #print("B:", B)
         kwargs = {"A":A, "B":B, "interest":interest_p, "nuisance":nuisance_p}
+        print("in quad prep:")
+        print("kwargs:", kwargs)
         return kwargs
 
     def log_prob_quad_f(self,samples):
@@ -861,6 +881,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         # Make sure parameters are tensorflow variables:
         parlist = c.convert_to_TF_variables(parlist_init)
 
+        print("parlist:", parlist)
+        print("interest:", interest)
+
         if A is None or B is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. 
             theta_prof_dict = None
@@ -891,18 +914,31 @@ class JointDistribution(tfd.JointDistributionNamed):
             print("A.shape:", A.shape)
             print("B.shape:", B.shape)
 
+            print("A:", A)
+            print("B:", B)
+
             # See test_jointdistribution (test_quad_prep) for explanation of how these shapes should work
             Ashift = theta_0 - A
             #sdiff_shape = c.get_bcast_shape(s.shape,s_0.shape) # This is redundant I should think...
             #sdiff = tf.broadcast_to(s,sdiff_shape) - tf.broadcast_to(s_0,sdiff_shape)
             sdiff = s - s_0
+            print("s:", s)
+            print("s_0:", s_0)
+            print("sdiff:", sdiff)
+            print("sdiff.shape:", sdiff.shape)
             Bvec = tf.linalg.matvec(B,sdiff)
-            theta_prof = Ashift - Bvec
+            print("Bvec:", Bvec)
+            #theta_prof = Ashift - Bvec
+            theta_prof = theta_0 - Bvec
             #batch_shape = theta_prof.shape[:-1] # Last dimension is flattened parameters, the rest can be thought of as the batch shape
             # ^^^ now have a more general method for restoring batch shape
 
             # de-stack analytically profiled nuisance parameters
             theta_prof_dict = c.decat_tensor_to_pars(theta_prof,nuisance,par_shapes,batch_shape) 
+
+            print("theta (in):", theta_0)
+            print("theta_prof:", theta_prof)
+            print("theta_prof_dict:", theta_prof_dict)
 
         return theta_prof_dict
  

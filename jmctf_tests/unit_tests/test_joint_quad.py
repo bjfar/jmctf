@@ -19,6 +19,7 @@ from jmctf_tests.common_fixtures import analysis, pars, pars0, joint0, samples, 
 
 
 has_curve = ["NormalAnalysis","NormalTEAnalysis","BinnedAnalysis_single","BinnedAnalysis"]
+#has_curve = ["BinnedAnalysis_single"]
 
 # Number of samples to draw during tests
 N = 2 # Doing plotting, so don't want tonnes of curves confusing things
@@ -67,6 +68,7 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     log_prob, joint_fitted_nuisance, fitted_pars_nuisance = joint.fit_nuisance(samples_batch)
 
     print("log_prob:", log_prob)
+    print("pars_batch:", pars_batch)
     print("fitted_pars_nuisance['fitted']:", fitted_pars_nuisance['fitted'])
     print("fitted_pars_nuisance['fixed']:", fitted_pars_nuisance['fixed'])
     print("pars_batch:", pars_batch)
@@ -99,8 +101,9 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     f2 = joint_fitted_all.log_prob_quad_f(samples_batch)
     log_prob_quad_2 = f2(pars_batch)
 
-    print("log_prob_quad_2 (expanded from BF points):", log_prob_quad_2)
-    #print("log_prob_quad (global BF expansion):"
+    print("log_prob:", log_prob)
+    print("log_prob_quad   (expanded from exact signal points):", log_prob_quad)
+    print("log_prob_quad_2 (global BF expansion):", log_prob_quad_2)
 
     # Ok let's make some plots!
 
@@ -141,3 +144,5 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     ax.legend(loc=0, frameon=False, framealpha=0, prop={'size':10}, ncol=1)
     plt.tight_layout()
     fig.savefig("unit_test_output/log_prob_quad_comparison_{0}.png".format(test_name))
+
+    assert False
