@@ -145,4 +145,4 @@ def test_plot_quad_logl(analysis,pars,samples,curve_par,test_name):
     plt.tight_layout()
     fig.savefig("unit_test_output/log_prob_quad_comparison_{0}.png".format(test_name))
 
-    assert False
+    # No real assertion test here, just need to look at the plots manually.
