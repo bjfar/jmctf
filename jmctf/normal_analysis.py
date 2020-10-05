@@ -99,7 +99,7 @@ class NormalAnalysis(BaseAnalysis):
         """
         Asamples = {}
         mu = signal_pars['mu'] * self.mu_scaling
-        Asamples["x"] = tf.expand_dims(mu,0) # Expand to sample dimension size 1
+        Asamples["x"] = mu
         return Asamples
 
     def get_observed_samples(self):

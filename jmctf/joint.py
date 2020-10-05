@@ -498,6 +498,16 @@ class JointDistribution(tfd.JointDistributionNamed):
         nuis  = {a.name: a.nuisance_parameter_shapes() for a in self.analyses.values()} 
         return interest, fixed, nuis
 
+    def event_shapes(self):
+        """Returns dictionary explaining the 'base' event shapes for each distribution in each analysis.
+           Analysis names are added as prefixes to the dict keys to match conventions for Osamples and
+           Asamples members (generated in constructor)
+        """
+        all_event_shapes = {}
+        for a in self.analyses.values():
+            all_event_shapes.update(c.add_prefix(a.name,a.event_shapes())) 
+        return all_event_shapes
+
     def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False,force_numeric=False):
         """Fit nuisance parameters to samples for a fixed signal
            (ignores parameters that were used to construct this object).

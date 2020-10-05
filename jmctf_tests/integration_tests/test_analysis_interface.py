@@ -117,6 +117,30 @@ def test_JointDistribution_output_shapes_single(joint,samples,log_prob_shape):
     print("log_prob_shape:", log_prob_shape)
     assert log_prob.shape == log_prob_shape
 
+def test_sample_shapes(joint,samples):
+    """Test that shapes are consistent across simulated, observed, and Asimov data
+       for each analysis"""
+
+    print("Simulated samples:", samples)
+    print("Observed samples:", joint.Osamples)
+    print("Asimov samples:", joint.Asamples)
+
+    for name,eshape in joint.event_shapes().items():
+        print("Distribution:", name)
+        n = len(eshape)
+        print("n:",n)
+        print("event shape:", eshape)
+        print("Osamples shape:", joint.Osamples[name].shape)
+        ashape = joint.Asamples[name].shape
+        print("Asamples shape:", ashape)
+        print("Asamples inferred event shape:", ashape[-n or len(ashape):])
+        sshape = samples[name].shape
+        print("Generated samples shape:", sshape)
+        print("Generated samples inferred event shape:", sshape[-n or len(sshape):])
+        assert joint.Osamples[name].shape == eshape 
+        assert ashape[-n or len(ashape):] == eshape
+        assert sshape[-n or len(sshape):] == eshape
+
 def test_fit_all(joint,samples,log_prob_shape):
     """Test fitting of all free parameters"""
     log_prob, joint_fitted, par_dict = joint.fit_all(samples)
