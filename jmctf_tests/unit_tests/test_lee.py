@@ -9,9 +9,9 @@ from tensorflow_probability import distributions as tfd
 import jmctf.common as c
 from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists, analysis_tests
-from jmctf.lee import LEECorrectorMaster
+from jmctf.lee import LEECorrectorMaster, LEECorrectorAnalysis
 
-N = 10 # Number of samples to generate in tests
+N_test_events = [10] # Number of samples to generate in tests
 
 # Hypothesis generator function for use with LEE in tests
 # We actually need to provide a function that *creates* the generator since we need to run it multiple times.
@@ -45,6 +45,10 @@ def get_hyp_gen_1(hypothesis):
 def analysis_params(request):
     analysis, params1, paramsN = request.param
     return analysis, params1, paramsN 
+
+@pytest.fixture(scope="module",params=N_test_events)
+def Nevents(request):
+    return request.param
 
 @pytest.fixture(scope="module")
 def analysis(analysis_params):
@@ -82,6 +86,25 @@ def lee(analysis,params1):
     lee = LEECorrectorMaster([analysis],path,master_name,null_hyp,nullname)
     return lee
 
+@pytest.fixture(scope="module")
+def leeAnalysis(analysis,params1):
+    null_hyp = params1
+    path = "unit_test_output"
+    master_name = list(params1.keys())[0] + "_leeAnalysis_unit_test"
+    nullname = "params1"
+    # Clear out old output from previous tests
+    # TODO: Should probably make a method to do this? Though the data can be valuable, can be nice to force manual deletion.
+    dirpath = Path(path)
+    if dirpath.exists(): 
+        if dirpath.is_dir():
+            shutil.rmtree(dirpath)
+        else:
+            msg = "{0} exists on system but isn't a directory! This is preventing the creation of output files necessary for running this unit test."
+            raise OSError(msg)
+    # Create single-analysis lee object
+    leeA = LEECorrectorAnalysis(analysis,path,master_name,null_hyp,nullname)
+    return leeA
+
 # Function scopes version for certain special tests
 @pytest.fixture(scope="function")
 def fresh_lee(analysis,params1):
@@ -102,9 +125,42 @@ def fresh_lee(analysis,params1):
     lee = LEECorrectorMaster([analysis],path,master_name,null_hyp,nullname)
     return lee
 
+# Function scope version for certain special tests
+@pytest.fixture(scope="function")
+def fresh_leeAnalysis(analysis,params1):
+    null_hyp = params1
+    path = "unit_test_output"
+    master_name = list(params1.keys())[0] + "_leeAnalysis_unit_test"
+    nullname = "params1"
+    # Clear out old output from previous tests
+    # TODO: Should probably make a method to do this? Though the data can be valuable, can be nice to force manual deletion.
+    dirpath = Path(path)
+    if dirpath.exists(): 
+        if dirpath.is_dir():
+            shutil.rmtree(dirpath)
+        else:
+            msg = "{0} exists on system but isn't a directory! This is preventing the creation of output files necessary for running this unit test."
+            raise OSError(msg)
+    # Create single-analysis lee object
+    leeA = LEECorrectorAnalysis(analysis,path,master_name,null_hyp,nullname)
+    return leeA
+
 @pytest.fixture(scope="module")
-def add_events(lee): 
-    lee.add_events(N)
+def add_events(lee,Nevents): 
+    lee.add_events(Nevents)
+
+@pytest.fixture(scope="module")
+def add_eventsA(leeAnalysis,Nevents): 
+    leeAnalysis.add_events(Nevents)
+
+@pytest.fixture(scope="function")
+def fresh_add_events(fresh_lee,Nevents): 
+    fresh_lee.add_events(Nevents)
+
+@pytest.fixture(scope="function")
+def fresh_add_eventsA(fresh_leeAnalysis,Nevents): 
+    fresh_leeAnalysis.add_events(Nevents)
+
 
 j = 0
 @pytest.fixture(scope="module")
@@ -121,6 +177,91 @@ def process_alternate(lee,add_events,paramsN):
     print("Running {0}th time: lee.db={1}".format(i,lee.db))
     i+=1
     lee.process_alternate(get_hyp_gen(paramsN))
+
+j = 0
+@pytest.fixture(scope="module")
+def process_nullA(leeAnalysis,add_eventsA):
+    global j
+    print("Running {0}th time: lee.db={1}".format(j,leeAnalysis.db))
+    j+=1
+    leeAnalysis.process_null()
+
+i = 0
+@pytest.fixture(scope="module")
+def process_alternateA(leeAnalysis,add_eventsA,paramsN):
+    global i
+    print("Running {0}th time: lee.db={1}".format(i,leeAnalysis.db))
+    i+=1
+    leeAnalysis.process_alternate(get_hyp_gen(paramsN))
+
+@pytest.fixture(scope="module")
+def jointA(leeAnalysis):
+    joint = JointDistribution([leeAnalysis.analysis])
+    return joint
+
+@pytest.fixture(scope="module")
+def eventsA(leeAnalysis,add_eventsA):
+    EventIDs, events = leeAnalysis.load_events()
+    return EventIDs, events 
+
+@pytest.fixture(scope="module")
+def fit_nullA(leeAnalysis,jointA,eventsA):
+    EventIDs, events = eventsA
+    alt_hyp = leeAnalysis.null_hyp
+    name = leeAnalysis.nullname
+    log_prob, joint_fitted, nuis_pars = jointA.fit_nuisance(events, alt_hyp, log_tag='q_'+name)
+    return log_prob, joint_fitted, nuis_pars
+
+@pytest.fixture(scope="module")
+def quad_funcA(leeAnalysis,eventsA,fit_nullA):
+    EventIDs, events = eventsA
+    log_prob, joint_fitted, nuis_pars = fit_nullA
+    quad = leeAnalysis._get_quad(EventIDs,nuis_pars['all'])
+    return quad
+
+@pytest.fixture(scope="module")
+def log_prob_quad_null(quad_funcA,params1):
+    # Compute log_prob_quad approximation to log_prob of null hypotheses,
+    # expanding around the null hypothesis point
+    log_prob_quad = quad_funcA(params1)
+    return log_prob_quad
+
+@pytest.fixture(scope="module")
+def log_prob_quad_alt(quad_funcA,paramsN):
+    # Compute log_prob_quad approximation to log_prob of alternate hypotheses,
+    # expanding around the null hypothesis point
+    print("paramsN:", paramsN)
+    log_prob_quad = quad_funcA(paramsN)
+    return log_prob_quad
+
+# Tests of single analysis wrapper class
+
+def test_construct_LEECorrectorAnalysis(leeAnalysis):
+    pass
+
+def test_add_events_singleA(add_eventsA):
+    pass
+
+def test_quad_null_singleA(fit_nullA,log_prob_quad_null):
+    # Check that log_prob_quad returns the same value as log_prob when
+    # evaluated for null hypothesis, expanded around null hypothesis
+    log_prob, joint_fitted, nuis_pars = fit_nullA
+    assert c.tf_all_equal(log_prob, log_prob_quad_null)
+
+def test_quad_alt_singleA(log_prob_quad_alt):
+    # Check that there are no errors computing log_prob_quad for
+    # several alternate hypotheses, expanding around null hypothesis
+    print("log_prob_quad_alt.shape:", log_prob_quad_alt.shape)
+    assert False
+    pass 
+
+def test_process_null_singleA(process_nullA):
+    pass
+
+def test_process_alternate_singleA(process_alternateA):
+    pass
+
+# Tests of full lee construction
 
 def test_construct_lee(lee):
     pass
