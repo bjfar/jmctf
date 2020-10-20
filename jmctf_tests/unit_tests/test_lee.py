@@ -9,7 +9,7 @@ from tensorflow_probability import distributions as tfd
 import jmctf.common as c
 from jmctf import JointDistribution
 from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_hypothesis, get_hypothesis_lists, analysis_tests
-from jmctf.lee import LEECorrectorMaster, LEECorrectorAnalysis
+from jmctf.lee import LEECorrectorMaster, LEECorrectorAnalysis, fix_dims_quad
 
 N_test_events = [10] # Number of samples to generate in tests
 
@@ -248,10 +248,18 @@ def test_quad_null_singleA(fit_nullA,log_prob_quad_null):
     log_prob, joint_fitted, nuis_pars = fit_nullA
     assert c.tf_all_equal(log_prob, log_prob_quad_null)
 
-def test_quad_alt_singleA(log_prob_quad_alt):
+def test_quad_alt_singleA(fit_nullA,log_prob_quad_alt):
     # Check that there are no errors computing log_prob_quad for
     # several alternate hypotheses, expanding around null hypothesis
     print("log_prob_quad_alt.shape:", log_prob_quad_alt.shape)
+
+    # Test dimension flattening
+    log_prob_null, joint_fitted_null, nuis_pars = fit_nullA
+    print("joint_fitted.bcast_batch_shape_tensor():", joint_fitted_null.bcast_batch_shape_tensor()) 
+    print("joint_fitted.event_shapes():", joint_fitted_null.event_shapes())
+
+    flatter_log_prob = fix_dims_quad(log_prob_quad_alt,"NULL")
+
     assert False
     pass 
 

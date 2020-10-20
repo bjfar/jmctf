@@ -408,7 +408,8 @@ def get_bcast_shape(shape1,shape2,numpy_bcast=True):
         msg = "Failed to broadcast shapes! -1 detected! (shape1 = {0}, shape2={1}, newshape = {2})".format(shape1,shape2,newshape)
         raise ValueError(msg)
     #print("newshape: {0}".format(newshape))
-    return tuple(newshape)
+    # shape elements may be individual tensors; will be cleaner to ensure they are all just ints
+    return tuple(int(x) for x in newshape)
 
 def squeeze_axis_0(pars):
     """Examines parameter (i.e. nested) dictionary and, if it can be interpreted

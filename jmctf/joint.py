@@ -1010,6 +1010,10 @@ class JointDistribution(tfd.JointDistributionNamed):
            a common consistent batch_shape for the whole JointDistribution. It
            will be an error if no consistent such shape exists after broadcasting
            rules are applied.
+
+           TODO: doesn't return a tensor. Should change the name and all references
+           to reflect this, i.e. it will only work with eager evaluation. That is
+           true for a lot of jmctf probably.
         """
         
         all_batch_shapes = self.batch_shape_tensor()
