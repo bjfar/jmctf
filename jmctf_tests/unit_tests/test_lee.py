@@ -186,13 +186,18 @@ def process_nullA(leeAnalysis,add_eventsA):
     j+=1
     leeAnalysis.process_null()
 
-i = 0
-@pytest.fixture(scope="module")
-def process_alternateA(leeAnalysis,add_eventsA,paramsN):
-    global i
-    print("Running {0}th time: lee.db={1}".format(i,leeAnalysis.db))
-    i+=1
-    leeAnalysis.process_alternate(get_hyp_gen(paramsN))
+# NOTE: Actually turns out this cannot be done at the single analysis level,
+# the LEECorrectorMaster object handles this.
+# Would probably be better to refactor this so that analyses can do it themselves,
+# but no time to do that for now.
+# i = 0
+# @pytest.fixture(scope="module")
+# def process_alternateA(leeAnalysis,eventsA,paramsN):
+#     global i
+#     print("Running {0}th time: lee.db={1}".format(i,leeAnalysis.db))
+#     i+=1
+#     EventIDs, events = eventsA
+#     leeAnalysis.process_alternate(get_hyp_gen(paramsN))
 
 @pytest.fixture(scope="module")
 def jointA(leeAnalysis):
@@ -255,19 +260,17 @@ def test_quad_alt_singleA(fit_nullA,log_prob_quad_alt):
 
     # Test dimension flattening
     log_prob_null, joint_fitted_null, nuis_pars = fit_nullA
-    print("joint_fitted.bcast_batch_shape_tensor():", joint_fitted_null.bcast_batch_shape_tensor()) 
+    batch_shape = joint_fitted_null.bcast_batch_shape_tensor() 
+    print("joint_fitted.bcast_batch_shape_tensor():", batch_shape) 
     print("joint_fitted.event_shapes():", joint_fitted_null.event_shapes())
 
-    flatter_log_prob = fix_dims_quad(log_prob_quad_alt,"NULL")
-
-    assert False
-    pass 
+    lpq2D = fix_dims_quad(log_prob_quad_alt,batch_shape)
 
 def test_process_null_singleA(process_nullA):
     pass
 
-def test_process_alternate_singleA(process_alternateA):
-    pass
+#def test_process_alternate_singleA(process_alternateA):
+#    pass
 
 # Tests of full lee construction
 
