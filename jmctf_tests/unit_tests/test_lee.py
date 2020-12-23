@@ -293,7 +293,8 @@ def test_trivial_alternate(fresh_lee,params1):
        Also checks that results match 'vanilla' results
        from JointDistribution"""
     # Need a largish number of events here to detect some rare problems
-    fresh_lee.add_events(1000)
+    fresh_lee.add_events(10)
+    #fresh_lee.add_events(1000)
     fresh_lee.process_null()
     fresh_lee.process_alternate(get_hyp_gen_1(params1))
     df_null, df_null_obs = fresh_lee.load_results(fresh_lee.null_table,['log_prob'],get_observed=True)

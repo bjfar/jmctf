@@ -543,15 +543,16 @@ class LEECorrectorMaster(LEECorrectorBase):
             sql.upsert(cur,self.null_table+'_observed',comb,primary='EventID')
             self.close_db(conn)
 
-    def _get_quads(self, EventIDs, return_batch_shapes=False):
+    def _get_quads(self, EventIDs, **kwargs):
         """Get quadratic approximations to likelihood surfaces for the given EventIDs
-           (using the null hypothesis (with fitted nuisance parameters) as the expansion point)"""
-        quads = {name: a._get_quad(EventIDs, return_batch_shapes) for name,a in self.LEEanalyses.items()}
+           (using the null hypothesis (with fitted nuisance parameters) as the expansion point
+           by default. Supplying other points is untested...)"""
+        quads = {name: a._get_quad(EventIDs, **kwargs) for name,a in self.LEEanalyses.items()}
         return quads
 
     def _process_alternate_batch(self, alt_hyp_gen, EventIDs, dbtype):
         """For internal use in 'process_alternate' function. Processes a single batch of events."""
-        quads = self._get_quads(EventIDs, True)
+        quads = self._get_quads(EventIDs, return_batch_shape=True)
 
         if hasattr(alt_hyp_gen,'count') and hasattr(alt_hyp_gen,'chunk_size'):
             Ns = alt_hyp_gen.count
@@ -641,18 +642,17 @@ class LEECorrectorMaster(LEECorrectorBase):
                 print("log_probs.shape:", log_probs.shape)
                 print("batch_shape:", batch_shape)
                 print("lpq2D.shape:", lpq2D.shape)
-                quit()
 
                 # Record all alternate_hypothesis likelihoods to disk, so that we can use them for bootstrap resampling later on.
                 # Warning: may take a lot of disk space if there are a lot of alternate hypotheses.
                 #print("EventIDs:", EventIDs)
-                a.record_alternate_logLs(log_probs,altIDs,EventIDs,Ltype='quad',dbtype=dbtype)
+                a.record_alternate_logLs(lpq2D, altIDs, EventIDs, Ltype='quad', dbtype=dbtype)
                 #print("...done")
-                #print("alterate hypothesis log_probs:", log_probs)
+                #print("alterate hypothesis log_probs:", lpq2D)
                 if comb_log_probs is None:
-                    comb_log_probs = log_probs
+                    comb_log_probs = lpq2D
                 else:
-                    comb_log_probs += log_probs
+                    comb_log_probs += lpq2D
 
             #print("alt_chunk:", alt_chunk)
             # Select the maximum logL from across all alternate hypotheses
@@ -1241,7 +1241,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # print("pars:", pars)
         # print("events_sq:", events_sq)
 
-        expansion_point = JointDistribution([self.analysis],pars)
+        expansion_point = JointDistribution([self.analysis], pars)
         quadf = expansion_point.log_prob_quad_f(events)
 
         #print("quadf:", quadf)
@@ -1253,7 +1253,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         else:
             return quadf
 
-    def record_alternate_logLs(self,log_probs,altIDs,EventIDs,Ltype,dbtype='hdf5'):
+    def record_alternate_logLs(self, log_probs, altIDs, EventIDs, Ltype, dbtype='hdf5'):
         """Record likelihoods from a batch of alternate hypothesis fits to 'full' tables.
            In this case ID numbers also need to be assigned to alternate hypotheses,
            so that we can uniquely assign each of them to a row in the
@@ -1310,9 +1310,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
                      mask = (this_range[0] <= EventIDs) & (EventIDs < this_range[1])
                  if np.sum(mask)>0:
-                     #print("EventIDs:", mask)
-                     #print("mask:", mask)
-                     #print("log_probs:", log_probs)
+                     print("EventIDs:", mask)
+                     print("mask:", mask)
+                     print("log_probs:", log_probs)
                      log_prob_batch = log_probs[mask]
                      if observed_mode:
                          eventID_batch = ['observed']
@@ -1552,10 +1552,10 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
                 # Check that log_prob_quads are actually better than the original fits
                 print("log_prob_quad:", log_prob_quad)
-                lpq2D = fix_dims_quad(log_prob_quad,batch_shape)
+                lpq2D = fix_dims_quad(log_prob_quad, batch_shape)
                 lp2D = fix_dims(log_prob)
-                m_worse = tf.greater(lp2D,lpq2D)
-                n_worse = tf.reduce_sum(tf.cast(m_worse,tf.float32))
+                m_worse = tf.greater(lp2D, lpq2D)
+                n_worse = tf.reduce_sum(tf.cast(m_worse, tf.float32))
                 if n_worse>0:
                     print("log_prob:",lp2D)
                     print("log_prob_quad:",lpq2D)
@@ -1564,8 +1564,8 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                 # Write events to output database               
                 # Write fitted nuisance parameters to disk as well, for later use in constructing quadratic approximation of profile likelihoods for alternate hypotheses
                 # Better to use these rather than parameters that come out of *this* quad function I think...
-                arrays = [lp2D,lpq2D]
-                cols = ["log_prob","log_prob_quad"]
+                arrays = [lp2D, lpq2D]
+                cols = ["log_prob", "log_prob_quad"]
                 fitted_pars = nuis_pars["fitted"]
 
                 n_pars = len([p for a in fitted_pars.values() for p in a.values()]) 
