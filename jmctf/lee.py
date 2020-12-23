@@ -1248,6 +1248,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         batch_shape = expansion_point.bcast_batch_shape_tensor()
         print("Expansion point batch_shape:", batch_shape)
 
+        # TODO! This is not the batch shape we want to return!
+        # We need the batch shape that we would get if we actually
+        # fitted the 'events' (we want the batch shape that would
+        # arise from the JointDistribution that would return
+        # the same log_probs as log_prob_quad). Need to check the
+        # broadcasting rules to remember what this should be!
+        raise Exception("Check TODO in the code here!")
+
         if return_batch_shape:
             return quadf, batch_shape
         else:
