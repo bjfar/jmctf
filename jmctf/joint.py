@@ -324,13 +324,18 @@ class JointDistribution(tfd.JointDistributionNamed):
             # Check that a consistent batch_shape can be found!
             # Will throw an error if it cannot.
             batch_shape = self.bcast_batch_shape_tensor()
-
         else:
             self.pars = None
         # If no pars provided can still fit the analyses, but obviously cannot sample or compute log_prob etc.
         # TODO: can we fail more gracefully if people try to do this?
         #       Or possibly the fitting stuff should be in a different object? It seems kind of nice here though.
         #print("self.pars = ", self.pars)
+
+    def has_pars(self):
+        """Determine whether parameters have been provided to this object.
+           If they haven't then the underlying JointDistributionNamed object has
+           not been initialised, so certain methods cannot be called"""
+        return self.pars != None
 
     def identify_const_parameters(self):
         """Ask component analyses to report which of their parameters are to be
@@ -489,24 +494,6 @@ class JointDistribution(tfd.JointDistributionNamed):
             msg = "NaNs detected in parameter starting guesses! The samples used to inform the starting guesses may be invalid (e.g. negative counts for Poisson variables). Parameter starting guess arrays containing NaNs were:{0}".format(nanpar)
             raise ValueError(msg)
         return pars, fixed_pars
-
-    def decomposed_parameter_shapes(self):
-        """Returns three dictionaries whose structure explains how parameters should be supplied
-           to this object"""
-        interest  = {a.name: a.interest_parameter_shapes() for a in self.analyses.values()}
-        fixed = {a.name: a.fixed_parameter_shapes() for a in self.analyses.values()}
-        nuis  = {a.name: a.nuisance_parameter_shapes() for a in self.analyses.values()} 
-        return interest, fixed, nuis
-
-    def event_shapes(self):
-        """Returns dictionary explaining the 'base' event shapes for each distribution in each analysis.
-           Analysis names are added as prefixes to the dict keys to match conventions for Osamples and
-           Asamples members (generated in constructor)
-        """
-        all_event_shapes = {}
-        for a in self.analyses.values():
-            all_event_shapes.update(c.add_prefix(a.name,a.event_shapes())) 
-        return all_event_shapes
 
     def fit_nuisance(self,samples,fixed_pars=None,log_tag='',verbose=False,force_numeric=False):
         """Fit nuisance parameters to samples for a fixed signal
@@ -985,8 +972,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         if not consistent:
             msg = "Inconsistent batch dimensions found! Batch shape dictionary was: {0}".format(joint.batch_shape_tensor())
             raise ValueError(msg)
-        event_shape = joint.event_shape_tensor()
-        s_batch_shape = c.sample_batch_shape(samples,event_shape)
+        s_batch_shape = joint.sample_batch_shape(samples)
         if s_batch_shape==() and (theta_prof_dict is None) : s_batch_shape = [0] # Interpret as one batch dim when zero. This is a little hacky, I probably need to tighten up the shape propagation.
         n_new_dims = len(batch_shape) - len(s_batch_shape)
         matched_samples = samples
@@ -994,7 +980,6 @@ class JointDistribution(tfd.JointDistributionNamed):
             matched_samples = c.deep_expand_dims(matched_samples,axis=1)
         log_prob = joint.log_prob(matched_samples)
         # print("batch_shape:", batch_shape)
-        # print("event_shape:", event_shape)
         # print("s_batch_shape:", s_batch_shape)
         # print("n_new_dims:", n_new_dims)
         # print("samples:", samples)
@@ -1051,6 +1036,62 @@ class JointDistribution(tfd.JointDistributionNamed):
         param_shapes = {name: a.parameter_shapes() for name,a in self.analyses.items()}
         return param_shapes
 
+    def decomposed_parameter_shapes(self):
+        """Returns three dictionaries whose structure explains how parameters should be supplied
+           to this object"""
+        interest  = {a.name: a.interest_parameter_shapes() for a in self.analyses.values()}
+        fixed = {a.name: a.fixed_parameter_shapes() for a in self.analyses.values()}
+        nuis  = {a.name: a.nuisance_parameter_shapes() for a in self.analyses.values()} 
+        return interest, fixed, nuis
 
+    def event_shapes(self):
+        """Returns dictionary explaining the 'base' event shapes for each distribution in each analysis.
+           Analysis names are added as prefixes to the dict keys to match conventions for Osamples and
+           Asamples members (generated in constructor).
 
+           Result is equivalent to calling self.event_shape_tensor(), however
+           event_shape_tensor() is a method inherited from 
+           JointDistributionNamed that cannot be called if self.has_pars() is
+           False. In contrast this method will always work.
+        """
+        all_event_shapes = {}
+        for a in self.analyses.values():
+            all_event_shapes.update(c.add_prefix(a.name,a.event_shapes())) 
+        return all_event_shapes
 
+    def sample_batch_shape(self, samples):
+        """Returns a shape tuple describing the shape of the dimensions of 
+           'sample' that would be interpreted as sample+batch dimensions if 'sample'
+           is input into methods of this object such as log_prob"""
+        event_shape = self.event_shapes()
+        s_batch_shape = c.sample_batch_shape(samples, event_shape)
+        return s_batch_shape
+
+    def expected_batch_shape_nuis(self, par_shapes, samples=None, sample_shape=None):
+        """Returns a shape tuple describing the batch dimensions of the
+           JointDistribution that would be obtained by fitting the nuisance
+           parameter of the current JointDistribution to 'samples' using
+           fixed 'parameters'.
+
+           Can provide either the actual samples that would be fitted, or else just
+           their sample+batch shape.
+        """
+        event_shapes = self.event_shapes() 
+        par_shapes = self.parameter_shapes()
+        dist_batch_shape = c.all_dist_batch_shape(parameters, par_shapes)
+        if sample_shape is not None and samples is not None:
+            raise ValueError("Please provide only one of 'samples' or 'sample_shape' as arguments")
+        elif sample_shape is None and samples is not None:
+            bcast_samples = c.bcast_sample_batch_shape(samples, event_shapes, dist_batch_shape)
+            bcast_dist_batch_shape = c.sample_batch_shape(bcast_samples, event_shapes)
+        elif samples is None and sample_shape is not None:
+            # TODO: Write broadcasting functions that can just work with the shapes!
+            raise Exception("Not implemented!")
+        else:
+            raise ValueError("Either 'samples' or 'sample_shape' must be provided!")
+        print("in expected_batch_shape_nuis:")
+        print("  event_shapes:", event_shapes)
+        print("  par_shapes:", par_shapes)
+        print("  dist_batch_shape:", dist_batch_shape)
+        print("  bcast_dist_batch_shape:", bcast_dist_batch_shape)
+        return bcast_dist_batch_shape

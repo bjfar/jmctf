@@ -13,8 +13,9 @@ where event_shape is the shape of one draw from the distribution, for one set of
 and batch_shape is any extra dimensions arising from having tensors of input parameters, i.e.
 "batches" of distributions.
 sample_shape is created when drawing samples, i.e. if we do distribution.sample(tensor) then
-the sample returned will have shape (tensor.shape,batch_shape,event_shape), where tensor.shape
-is sample_sample.
+the sample returned will have shape (sample_shape,batch_shape,event_shape), where 
+sample_shape = tensor (i.e. if tensor is (20,5) then you generate a 20x5 array of
+samples, each with shape (batch_shape,event_shape)).
 
 When computing log_prob, the broadcasting works as follows. Say we do:
    logp = distribution.log_prob(sample)
@@ -22,7 +23,8 @@ If sample.shape = (sample_shape,batch_shape,event_shape), where batch_shape and 
 match those of 'distribution', then broadcasting is simple: any dimensions of size 1 get
 broadcast, and any incompatible dimensions cause an error.
 
-The difficulty is when batch_shape and event_shape don't match. Then what happens is the following:
+The difficulty is when batch_shape and event_shape don't match between the sample and the distribution. 
+Then what happens is the following:
   1. sample.shape is compared to (batch_shape,event_shape). Let len(batch_shape,event_shape)=n. 
      If sample.shape has fewer dimensions, pad them on the left with singleton dimensions.
   2. Broadcast the n right-most dimensions of sample against (batch_shape,event_shape). The remaining

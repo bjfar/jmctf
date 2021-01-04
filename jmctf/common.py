@@ -627,7 +627,6 @@ def all_dist_batch_shape(parameters,parameter_shapes):
                 raise ValueError(msg) from e
     return batch_shape
 
-
 def bcast_sample_batch_shape(samples,event_shapes,new_batch_shape):
     """Take 'samples' and broadcast them all against a second batch shape"""
     out = {}

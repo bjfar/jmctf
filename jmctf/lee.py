@@ -626,10 +626,12 @@ class LEECorrectorMaster(LEECorrectorBase):
 
             # Input validated, onto the analysis
 
-            for name,a in self.LEEanalyses.items():
+            for name, a in self.LEEanalyses.items():
                 #print("running quad:",name)
-                quad, batch_shape = quads[name] 
-                log_probs = quad({name: alt_chunk[name]})
+                quad = quads[name]
+                pars = {name: alt_chunk[name]}
+                batch_shape = a.joint.expected_batch_shape_nuis(pars, samples) 
+                log_probs = quad(pars)
                 lpq2D = fix_dims_quad(log_probs, batch_shape)
  
                 #if len(log_probs.shape)==1:
@@ -1184,7 +1186,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
 
         return log_prob_sb
 
-    def _get_quad(self, EventIDs, expansion_point=None, return_batch_shape=False):
+    def _get_quad(self, EventIDs, expansion_point=None):
         """Get quadratic approximations to likelihood surfaces for the given EventIDs
            (using the null hypothesis (with fitted nuisance parameters) as the expansion point)"""
 
@@ -1203,10 +1205,10 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             expansion_point = c.deep_merge(self.null_hyp, fitted_nuis_pars) 
         events = c.add_prefix(self.analysis.name, self.load_events_with_IDs(EventIDs))
         #print("loaded events:", events)
-        quad = self.compute_quad(expansion_point, events, return_batch_shape)
+        quad = self.compute_quad(expansion_point, events)
         return quad
 
-    def compute_quad(self, pars, events, return_batch_shape=False):
+    def compute_quad(self, expansion_pars, events):
         """Compute quadratic approximations of profile likelihood for the specified
            set of events, expanding around the supplied parameter point.
 
@@ -1216,9 +1218,9 @@ class LEECorrectorAnalysis(LEECorrectorBase):
            and events supplied have dimensions consistent with this.
         """
 
-        par_size = c.deep_size(pars,axis=0)
+        par_size = c.deep_size(expansion_pars,axis=0)
 
-        print("pars:", pars)
+        print("expansion_pars:", expansion_pars)
         print("events:", events)
 
         # Squeeze out the "hypothesis list" axis from events, to give output Hessians
@@ -1241,7 +1243,7 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # print("pars:", pars)
         # print("events_sq:", events_sq)
 
-        expansion_point = JointDistribution([self.analysis], pars)
+        expansion_point = JointDistribution([self.analysis], expansion_pars)
         quadf = expansion_point.log_prob_quad_f(events)
 
         #print("quadf:", quadf)
@@ -1254,12 +1256,36 @@ class LEECorrectorAnalysis(LEECorrectorBase):
         # arise from the JointDistribution that would return
         # the same log_probs as log_prob_quad). Need to check the
         # broadcasting rules to remember what this should be!
-        raise Exception("Check TODO in the code here!")
+        # 
+        # Side-by-side comparison of calculations (quad vs standard)
+        #
+        # logp calculation procedure with standard numerical fitting: 
+        # 1. Set "signal" evaluation point(s): pars
+        # 2. Fit remaining nuisance parameters to samples 
+        #    -> output is JointDistribution with all those fitted parameters as the batch_shape
+        #    i.e. batch_shape = (samples.shape, pars.shape)
+        # 3. Evaluate the log_prob of those same samples
+        #    -> output shape is logp.shape = (samples.shape, pars.shape)
+        #
+        # logp calculation procedure with quad expansion
+        # 1. Set "signal" expansion point (just one?) expansion_pars
+        # 2. Fit nuisance parameters to samples at that point
+        #    -> output is logp_quad_f function
+        # 3. Evaluate logp_quad_f for full set of "signal" evaluation points (pars)
+        #    -> output shape should be logp.shape = (samples.shape, pars.shape)
+        #       (i.e. same as above)
+        #
+        # But to ensure shapes are correct, we need to know the batch_shape for the JointDistribution
+        # from the first method in the second method.
+        # ...but we cannot compute it here, because we don't have pars.shape. So we need to provide
+        # the rest of the shape information that can then be combined with pars.shape when it becomes
+        # available.
+        # i.e. need to provide 
+        # 
 
-        if return_batch_shape:
-            return quadf, batch_shape
-        else:
-            return quadf
+        #raise Exception("Check TODO in the code here!")
+
+        return quadf
 
     def record_alternate_logLs(self, log_probs, altIDs, EventIDs, Ltype, dbtype='hdf5'):
         """Record likelihoods from a batch of alternate hypothesis fits to 'full' tables.
@@ -1603,12 +1629,14 @@ class LEECorrectorAnalysis(LEECorrectorBase):
             batch_shape = joint_fitted.bcast_batch_shape_tensor()
  
             # Get 'quad' estimate/improvement
-            quad, quad_bshape = self.compute_quad(pars['all'],Osamples,return_batch_shape=True)
-            print("batch_shape:", batch_shape)
-            print("quad_bshape:", quad_bshape)
+            quad = self.compute_quad(pars['all'],Osamples)
             log_prob_quad_O = quad(self.null_hyp)
+            # Need the 'effective' batch shape that a JointDistribution fitted 
+            # to these samples using these parameters would have. 
+            eff_batch_shape = joint.expected_batch_shape_nuis(pars['all'], Osamples)        
+            print("effective batch_shape:", eff_batch_shape)
 
-            arrays = [fix_dims(log_prob_bO),fix_dims_quad(log_prob_quad_O,batch_shape)]
+            arrays = [fix_dims(log_prob_bO),fix_dims_quad(log_prob_quad_O,eff_batch_shape)]
             cols = ['log_prob','log_prob_quad']
             fitted_pars = pars["fitted"]
 
