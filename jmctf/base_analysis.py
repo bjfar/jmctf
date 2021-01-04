@@ -72,7 +72,7 @@ class BaseAnalysis:
             raise ValueError(msg) from e
 
         # Broadcast both the parameters and samples to this inferred batch shape
-        out_samples = c.bcast_sample_batch_shape(samples,self.event_shapes(),final_batch_shape)
+        out_samples = c.bcast_sample_batch_shape(self.event_shapes(),final_batch_shape,samples=samples)
         out_pars    = c.bcast_dist_batch_shape(parameters,self.parameter_shapes(),final_batch_shape)
 
         return out_pars, out_samples

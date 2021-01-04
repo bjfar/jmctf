@@ -552,7 +552,7 @@ class LEECorrectorMaster(LEECorrectorBase):
 
     def _process_alternate_batch(self, alt_hyp_gen, EventIDs, dbtype):
         """For internal use in 'process_alternate' function. Processes a single batch of events."""
-        quads = self._get_quads(EventIDs, return_batch_shape=True)
+        quads = self._get_quads(EventIDs)
 
         if hasattr(alt_hyp_gen,'count') and hasattr(alt_hyp_gen,'chunk_size'):
             Ns = alt_hyp_gen.count
@@ -630,7 +630,7 @@ class LEECorrectorMaster(LEECorrectorBase):
                 #print("running quad:",name)
                 quad = quads[name]
                 pars = {name: alt_chunk[name]}
-                batch_shape = a.joint.expected_batch_shape_nuis(pars, samples) 
+                batch_shape = a.joint.expected_batch_shape_nuis(pars, sample_shape=(len(EventIDs),)) 
                 log_probs = quad(pars)
                 lpq2D = fix_dims_quad(log_probs, batch_shape)
  

@@ -1067,7 +1067,7 @@ class JointDistribution(tfd.JointDistributionNamed):
         s_batch_shape = c.sample_batch_shape(samples, event_shape)
         return s_batch_shape
 
-    def expected_batch_shape_nuis(self, par_shapes, samples=None, sample_shape=None):
+    def expected_batch_shape_nuis(self, parameters, samples=None, sample_shape=None):
         """Returns a shape tuple describing the batch dimensions of the
            JointDistribution that would be obtained by fitting the nuisance
            parameter of the current JointDistribution to 'samples' using
@@ -1082,11 +1082,10 @@ class JointDistribution(tfd.JointDistributionNamed):
         if sample_shape is not None and samples is not None:
             raise ValueError("Please provide only one of 'samples' or 'sample_shape' as arguments")
         elif sample_shape is None and samples is not None:
-            bcast_samples = c.bcast_sample_batch_shape(samples, event_shapes, dist_batch_shape)
+            bcast_samples = c.bcast_sample_batch_shape(event_shapes, dist_batch_shape, samples=samples)
             bcast_dist_batch_shape = c.sample_batch_shape(bcast_samples, event_shapes)
         elif samples is None and sample_shape is not None:
-            # TODO: Write broadcasting functions that can just work with the shapes!
-            raise Exception("Not implemented!")
+            bcast_dist_batch_shape = c.bcast_sample_batch_shape(event_shapes, dist_batch_shape, sample_shape=sample_shape)
         else:
             raise ValueError("Either 'samples' or 'sample_shape' must be provided!")
         print("in expected_batch_shape_nuis:")

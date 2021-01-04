@@ -627,15 +627,31 @@ def all_dist_batch_shape(parameters,parameter_shapes):
                 raise ValueError(msg) from e
     return batch_shape
 
-def bcast_sample_batch_shape(samples,event_shapes,new_batch_shape):
-    """Take 'samples' and broadcast them all against a second batch shape"""
-    out = {}
-    current_batch_shape = sample_batch_shape(samples,event_shapes)
-    for name,x in samples.items():
-        eshape = event_shapes[name]
-        new_shape = [d for d in get_bcast_shape(current_batch_shape,new_batch_shape)] + [d for d in eshape]
-        out[name] = tf.broadcast_to(x,new_shape)
-    return out
+def bcast_sample_batch_shape(event_shapes, new_batch_shape, samples=None, sample_shape=None):
+    """Take 'samples' and broadcast them all against a second batch shape
+       Can provide 'sample_shape' instead of 'samples' if only the output
+       shapes (rather than actual broadcast samples) is required. This
+       should be the shape of the common non-event_shape dimensions of
+       the samples.
+    """
+    if sample_shape is not None and samples is not None:
+        raise ValueError("Please provide only one of 'samples' or 'sample_shape' as arguments")
+    elif sample_shape is None and samples is not None:
+        current_batch_shape = sample_batch_shape(samples, event_shapes)
+        out = {}
+    elif samples is None and sample_shape is not None:
+        current_batch_shape = sample_shape
+    else:
+        raise ValueError("Either 'samples' or 'sample_shape' must be provided!")
+    bcast_batch_shape = get_bcast_shape(current_batch_shape, new_batch_shape)
+    if samples is not None:
+        for name,x in samples.items():
+            eshape = event_shapes[name]
+            new_shape = [d for d in bcast_batch_shape] + [d for d in eshape]
+            out[name] = tf.broadcast_to(x, new_shape)
+        return out
+    else:
+        return bcast_batch_shape
     
 def bcast_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
     """Take 'parameters' for a distribution and broadcast them all against a second batch shape"""
