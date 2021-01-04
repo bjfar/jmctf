@@ -627,10 +627,16 @@ class LEECorrectorMaster(LEECorrectorBase):
             # Input validated, onto the analysis
 
             for name, a in self.LEEanalyses.items():
-                #print("running quad:",name)
+                print("running quad:",name)
                 quad = quads[name]
                 pars = {name: alt_chunk[name]}
-                batch_shape = a.joint.expected_batch_shape_nuis(pars, sample_shape=(len(EventIDs),)) 
+                print("EventIDs:", EventIDs)
+                if isinstance(EventIDs, str) and EventIDs=="observed":
+                    sample_shape = (1,)
+                else:
+                    sample_shape = (len(EventIDs),)
+                batch_shape = a.joint.expected_batch_shape_nuis(pars, sample_shape=sample_shape)
+                print("pars:", pars)
                 log_probs = quad(pars)
                 lpq2D = fix_dims_quad(log_probs, batch_shape)
  

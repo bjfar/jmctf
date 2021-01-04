@@ -941,12 +941,16 @@ class JointDistribution(tfd.JointDistributionNamed):
 
         return theta_prof_dict
  
-    def _log_prob_quad(self,signal,samples,**kwargs):
+    def _log_prob_quad(self, signal, samples, **kwargs):
         """Compute loglikelihood using pre-computed Taylor expansion
            parameters (for many samples) for a set of signal hypotheses"""
 
+        print("signal:", signal)
+
         # Get the profiled nuisance parameters under the Taylor expansion.
         theta_prof_dict = self._nuisance_quad(signal,**kwargs)
+
+        print("theta_prof_dict:", theta_prof_dict)
 
         if theta_prof_dict is None:
             # No nuisance parameters exist for this analysis! So no expansion to be done. Just evaluate the signal directly.
@@ -962,29 +966,30 @@ class JointDistribution(tfd.JointDistributionNamed):
             joint = JointDistribution(self.analyses.values(),c.deep_merge(signal,theta_prof_dict))
 
         batch_shape = self.bcast_batch_shape_tensor()
-        # print("in _log_prob_quad: batch_shape = ",batch_shape)
+        print("in _log_prob_quad: batch_shape = ",batch_shape)
 
         # Need to match samples to the batch shape (i.e. broadcast over the 'hypothesis' dimension)
         # This is a little confusing, but basically need to make the sample_shape+batch_shape for the sample
         # match the batch_shape of the JointDistribution. Will assume axis 0 is always the "number of samples", so extra dims
         # are to be inserted into the batch dims of the sample at axis 1.
+        # Unless the samples have scalar shape. Then we start adding new axes from axis 0.
         consistent, batch_shape = c.deep_equals(joint.batch_shape_tensor())
         if not consistent:
             msg = "Inconsistent batch dimensions found! Batch shape dictionary was: {0}".format(joint.batch_shape_tensor())
             raise ValueError(msg)
         s_batch_shape = joint.sample_batch_shape(samples)
-        if s_batch_shape==() and (theta_prof_dict is None) : s_batch_shape = [0] # Interpret as one batch dim when zero. This is a little hacky, I probably need to tighten up the shape propagation.
+        print("batch_shape:", batch_shape)
+        print("s_batch_shape:", s_batch_shape)
         n_new_dims = len(batch_shape) - len(s_batch_shape)
         matched_samples = samples
+        print("n_new_dims:", n_new_dims)
+        print("samples:", samples)
+        new_axis = 0 if s_batch_shape==() else 1
         for i in range(n_new_dims):
-            matched_samples = c.deep_expand_dims(matched_samples,axis=1)
+            matched_samples = c.deep_expand_dims(matched_samples,axis=new_axis)
         log_prob = joint.log_prob(matched_samples)
-        # print("batch_shape:", batch_shape)
-        # print("s_batch_shape:", s_batch_shape)
-        # print("n_new_dims:", n_new_dims)
-        # print("samples:", samples)
-        # print("matched_samples:", matched_samples)
-        # print("log_prob:", log_prob)
+        print("matched_samples:", matched_samples)
+        print("log_prob:", log_prob)
         return log_prob #c.squeeze_to(q,2,dont_squeeze=[0])
 
     def bcast_batch_shape_tensor(self):
@@ -1089,6 +1094,9 @@ class JointDistribution(tfd.JointDistributionNamed):
         else:
             raise ValueError("Either 'samples' or 'sample_shape' must be provided!")
         print("in expected_batch_shape_nuis:")
+        print("  parameters:", parameters)
+        print("  samples:", samples)
+        print("  sample_shape:", sample_shape)
         print("  event_shapes:", event_shapes)
         print("  par_shapes:", par_shapes)
         print("  dist_batch_shape:", dist_batch_shape)
