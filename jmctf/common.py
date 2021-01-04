@@ -268,7 +268,21 @@ def flatten(container):
             else:
                 yield i
 
-def atleast_2d(pars,report=False,new1Daxis=1):
+def atleast_1d(x):
+    """Ensure any scalar objects are promoted to singleton arrays
+       Works regardless of whether input is a plain int/float etc.,
+       a numpy array, or a tesnorflow tensor. In case of tensor
+       input the result will remain a tensor, otherwise the output
+       is a numpy array (or an error if conversion to numpy array
+       is not possible)
+    """
+    if (isinstance(x, tf.Tensor) or isinstance(x, tf.Variable)
+       ) and x.shape==():
+        return tf.expand_dims(x, axis=0)
+    else:
+        return np.atleast_1d(x)
+
+def dict_atleast_2d(pars,report=False,new1Daxis=1):
     """Ensure parameters in nested dictionaries meet the shape conventions of JointDistribution, i.e.
        all pars must be 2D (as expanded by atleast_2d)
        Doesn't work quite like the numpy version by default: new dimensions
@@ -431,13 +445,15 @@ def squeeze_axis_0(pars):
         out = pars # Do nothing to parameters, not even the shape adjustment
     return out
 
-def squeeze_to(tensor,d,dont_squeeze=[]):
+def squeeze_to(tensor,d,dont_squeeze=[],from_right=False):
     """Squeeze a tensor down to d dimensions.
        Throws error if this is not possible.
        Just squeezes singleton dimensions starting
        from the left until dimensions matches d.
        Dimensions in dont_squeeze list will not
        be squeezed.
+       If from_right is True then squeezing starts
+       from right-most dimensions.
     """
     squeezeable_dims = [d for d in tf.where(tf.equal(tensor.shape,1))[:,0].numpy() if d not in dont_squeeze]
     nextra = len(tensor.shape) - d
@@ -450,7 +466,10 @@ def squeeze_to(tensor,d,dont_squeeze=[]):
         msg = "Could not squeeze {0}d tensor to {1} dimensions! Not enough squeezeable dimensions! (len(squeezeable_dims) = {2}, tensor.shape = {3}, dont_squeeze = {4})".format(len(tensor.shape), d, len(squeezeable_dims), tensor.shape, dont_squeeze)
         raise ValueError(msg)
     else:
-        out = tf.squeeze(tensor,axis=squeezeable_dims[:nextra])
+        if from_right:
+            out = tf.squeeze(tensor,axis=squeezeable_dims[-nextra:])
+        else:
+            out = tf.squeeze(tensor,axis=squeezeable_dims[:nextra]) 
     return out
 
 @deep(1)

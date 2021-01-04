@@ -2,6 +2,7 @@
 
 import pytest
 import numpy as np
+import pandas as pd
 from pathlib import Path
 import shutil
 import tensorflow as tf
@@ -310,11 +311,18 @@ def test_trivial_alternate(fresh_lee,params1):
     joint = JointDistribution(fresh_lee.analyses,params1)
     log_prob, joint_fitted, par_dict = joint.fit_nuisance(samples,params1)
     print("log_prob:", log_prob)
-    print("df_null['log_prob'] - log_prob:", df_null['log_prob'] - log_prob[:,0,0])
-    print("df_prof['log_prob_quad'] - log_prob:", df_prof['log_prob_quad'] - log_prob[:,0,0])
-    print("df_null['log_prob'] - df_prof['log_prob_quad']:", df_null['log_prob'] - df_prof['log_prob_quad'])
-    tol = 1e-6
-    assert ((df_null['log_prob'] - log_prob[:,0,0]).abs() < tol).all() # LEE null vs JointDistribution
-    assert ((df_prof['log_prob_quad'] - log_prob[:,0,0]).abs() < tol).all() # LEE (quad) alternate vs JointDistribution
+    # Dataframe results from lee routines are always 2D. Need to ensure
+    # "manually" obtained log_prob array matches this.
+    log_prob_2d = c.squeeze_to(log_prob, 2, dont_squeeze=[0,1]).numpy()
+    print("log_prob_2d:", log_prob_2d)
+    log_prob_df = pd.DataFrame(log_prob_2d, columns=['log_prob']) 
+    print("log_prob_df:", log_prob_df)
+    tol = 1e-4
+    print(  "df_null['log_prob'] - log_prob:", df_null['log_prob'] - log_prob_df['log_prob'])
+    assert ((df_null['log_prob'] - log_prob_df['log_prob']).abs() < tol).all() # LEE null vs JointDistribution
+    print(  "df_prof['log_prob_quad'] - log_prob:", df_prof['log_prob_quad'] - log_prob_df['log_prob'])
+    assert ((df_prof['log_prob_quad'] - log_prob_df['log_prob']).abs() < tol).all() # LEE (quad) alternate vs JointDistribution
+    print(  "df_null['log_prob'] - df_prof['log_prob_quad']:", df_null['log_prob'] - df_prof['log_prob_quad'])
     assert ((df_null['log_prob'] - df_prof['log_prob_quad']).abs() < tol).all() # LEE: null vs (quad) alternate (redundant but why not do it)
+    print(  "df_null_obs['log_prob'] - df_prof_obs['log_prob_quad']:", df_null_obs['log_prob'] - df_prof_obs['log_prob_quad'])
     assert ((df_null_obs['log_prob'] - df_prof_obs['log_prob_quad']).abs() < tol).all() # LEE: null vs alternate (obs)

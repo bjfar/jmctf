@@ -394,14 +394,14 @@ class BinnedAnalysis(BaseAnalysis):
         return seeds
 
 
-    def get_seeds_nuis(self,samples,signal_pars):
+    def get_seeds_nuis(self, samples, signal_pars):
         """Get seeds for (additive) nuisance parameter fits,
            assuming fixed signal parameters. Gives exact MLEs in
            the absence of correlations
            TODO: Check that signal parameters are, in fact, fixed?
            """
-        verbose = False # For debugging
-        if verbose: print("signal (seeds_nuis):",signal)
+        verbose = True # For debugging
+        if verbose: print("signal (seeds_nuis):",signal_pars)
         seeds={}
         self.theta_both={} # For debugging, need to compare BOTH solutions to numerical MLEs.
         self.theta_dat={}
@@ -436,9 +436,15 @@ class BinnedAnalysis(BaseAnalysis):
                 x = x_all[...,i]
             s = s_all[...,i]
 
-            #print("s:", s)
-            #print("n:", n)
-            #print("x:", x)
+            # If s, n, or x are scalars then we need to promote them to
+            # singleton arrays in order for various masking etc. to work
+            s = c.atleast_1d(s)
+            n = c.atleast_1d(n)
+            x = c.atleast_1d(x)
+ 
+            print("s:", s)
+            print("n:", n)
+            print("x:", x)
 
             # From object member variables
             b = tf.constant(self.SR_b[i],dtype=c.TFdtype)
@@ -453,6 +459,10 @@ class BinnedAnalysis(BaseAnalysis):
             B = 1 + A*(s + b - x)
             C = (s+b)*(1-A*x) - n
             D = (B**2 - 4*A*C).numpy() # to be used in masks
+            print("A:",A)
+            print("B:",B)
+            print("C:",C)
+            print("D:",D)
             #D<0:
             #print("D:", D.shape)
             #print("D<0", (D<0).shape)
