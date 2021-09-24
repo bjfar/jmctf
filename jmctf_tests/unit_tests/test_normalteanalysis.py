@@ -18,13 +18,17 @@ def get_single_hypothesis():
     pars = {'mu': tf.constant(1.5,dtype=c.TFdtype),
             'theta': tf.constant(0.5,dtype=c.TFdtype),
             'sigma_t': tf.constant(1.,dtype=c.TFdtype)}
-    return pars
+    exp_batch_shapes = {'mu': (), 'theta': (), 'sigma_t': ()}
+    exp_dist_batch_shape = ()
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_three_hypotheses():
     pars = {'mu': tf.constant([0.,1.,2.],dtype=c.TFdtype),
             'theta': tf.constant([0.,0.,0.],dtype=c.TFdtype),
             'sigma_t': tf.constant([1e-10,0.5,1.],dtype=c.TFdtype)} # Currently 0 doesn't work due to divide by zero
-    return pars
+    exp_batch_shapes = {'mu': (3,), 'theta': (3,), 'sigma_t': (3,)}
+    exp_dist_batch_shape = (3,)
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_hypothesis_curves():
     """Curves of hypotheses that should almost always encompass the best-fit point

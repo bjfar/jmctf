@@ -331,17 +331,22 @@ def fix_dims_quad(log_prob_quad,batch_shape):
     singletons = [i for i,d in enumerate(log_prob_quad.shape) if d==1]
     if len(singletons)>0:
         log_prob_squeezed = tf.squeeze(log_prob_quad,axis=singletons)
+        print("squeezed {} singleton dims".format(len(singletons)))
     else:
         log_prob_squeezed = log_prob_quad
 
     if log_prob_squeezed.shape==():
+        print("Squeezed shape is scalar, adding in singleton hypothesis and event dimensions")
         lpq2D = tf.expand_dims(tf.expand_dims(log_prob_squeezed,axis=0),axis=0) # Add in "hypothesis" and "events" dimensions
     elif len(log_prob_squeezed.shape)==1:
         if singleton_batch:
+            print("Squeezed shape is dim 1, and batch_shape is singleton, so adding in singleton event dim")
             lpq2D = tf.expand_dims(log_prob_squeezed,axis=0) # Add in "events" dimension if it was missing due to only one event.
         else:
+            print("Squeezed shape is dim 1, and batch_shape is NOT singleton, so adding in hypothesis dim")
             lpq2D = tf.expand_dims(log_prob_squeezed,axis=1) # Must be the "hypothesis" dimension that is missing
     elif len(log_prob_squeezed.shape)==2:
+        print("Squeezed shape is 2D, no change required")
         # Already 2D
         lpq2D = log_prob_squeezed
         pass
@@ -635,8 +640,9 @@ class LEECorrectorMaster(LEECorrectorBase):
                     sample_shape = (1,)
                 else:
                     sample_shape = (len(EventIDs),)
-                batch_shape = a.joint.expected_batch_shape_nuis(pars, sample_shape=sample_shape)
                 print("pars:", pars)
+                print("sample_shape:", sample_shape)
+                batch_shape = a.joint.expected_batch_shape_nuis(pars, sample_shape=sample_shape)
                 log_probs = quad(pars)
                 lpq2D = fix_dims_quad(log_probs, batch_shape)
  
@@ -1350,10 +1356,25 @@ class LEECorrectorAnalysis(LEECorrectorBase):
                      this_range = (i*events_per_table+1,(i+1)*events_per_table+1) # EventIDs start at 1
                      mask = (this_range[0] <= EventIDs) & (EventIDs < this_range[1])
                  if np.sum(mask)>0:
-                     print("EventIDs:", mask)
+                     print("EventIDs:", EventIDs)
                      print("mask:", mask)
                      print("log_probs:", log_probs)
-                     log_prob_batch = log_probs[mask]
+ 
+                     # BUG HERE
+                     # Info: 
+                     # mask is supposed to be selecting Events, i.e. pseudo-experiment trials
+                     #   i.e. shape (N_trials,)
+                     # log_probs is the log-probability of a batch of alternate hypotheses,
+                     #   computed via broadcast against trials 
+                     #   i.e. shape (N_alt, N_trials)
+                     # I think N_alt is always flat? So need to change from this:
+                     # log_prob_batch = log_probs[mask]
+                     #   to this?
+                     # broadcast mask:
+                     big_mask = np.array((log_probs*0 + 1) * mask[np.newaxis,:], dtype=np.bool)
+                     print("big_mask:", big_mask)
+                     log_prob_batch = log_probs[big_mask]
+
                      if observed_mode:
                          eventID_batch = ['observed']
                      else:

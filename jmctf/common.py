@@ -614,6 +614,13 @@ def dist_batch_shape(parameters,parameter_shapes):
     """
     batch_shape = None
     for name,p in parameters.items():
+        if isinstance(p, dict):
+            msg = ("Parameter dict item {} was another dictionary! This "
+                   "function should only be supplied with dictionaries of "
+                   "parameter arrays; further nesting should be unpacked "
+                   "by the calling function.\n(value was: {})"
+                   .format(name, p))
+            raise TypeError(msg)
         try:
             pshape = parameter_shapes[name]
             bshape = _get_batch_shape(p,pshape)

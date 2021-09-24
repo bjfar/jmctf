@@ -14,8 +14,8 @@ from jmctf_tests.analysis_class_register import get_id_list, get_obj, get_test_h
                 ids = [name + " (single hypothesis)" for name in get_id_list()]
                      +[name + " (hypothesis list)" for name in get_id_list()])
 def analysis_and_parameters(request):
-    analysis, parameters = request.param
-    return (analysis, parameters)
+    analysis, parameters_shapes = request.param
+    return (analysis, parameters_shapes)
 
 @pytest.fixture(scope="module")
 def analysis(analysis_and_parameters):
@@ -24,8 +24,13 @@ def analysis(analysis_and_parameters):
 
 @pytest.fixture(scope="module")
 def parameters(analysis_and_parameters):
-    analy, pars = analysis_and_parameters
+    analy, (pars, bs, dist_bs) = analysis_and_parameters
     return {analy.name: pars}
+
+@pytest.fixture(scope="module")
+def batch_shapes(analysis_and_parameters):
+    analy, (pars, batch_shapes, dist_batch_shape) = analysis_and_parameters
+    return batch_shapes, dist_batch_shape
 
 # Fixture to create tensorflow_probability models from each Analysis/test parameter combination
 @pytest.fixture(scope="module")
@@ -57,3 +62,34 @@ def test_decat_tensor_to_pars(par_tensor_and_batch_shape,joint,parameters):
     print("parameters (template)", parameters)
     print("pars:", pars)
 
+def test_all_dist_batch_shape(joint, parameters, batch_shapes):
+    exp_batch_shape = batch_shapes[0]
+    exp_dist_batch_shape = batch_shapes[1]
+    print("joint:", joint)
+    shapes = joint.parameter_shapes()     
+    print("parameters:", parameters)
+    print("parameter shapes:", shapes)
+    print("expected distribution batch shape:", exp_dist_batch_shape)
+    dist_batch_shape = c.all_dist_batch_shape(parameters, shapes)
+    print("inferred distribution batch shape:", dist_batch_shape)
+    assert exp_dist_batch_shape == dist_batch_shape
+
+def test_dist_batch_shape(joint, parameters, batch_shapes):
+    # Bascially the same as test_all_dist_batch_shape since our
+    # tests currently only use one analysis at a time, but we
+    # dig out that one analysis manually first.
+    exp_batch_shape = batch_shapes[0]
+    exp_dist_batch_shape = batch_shapes[1]
+    print("joint:", joint)
+    shapes = joint.parameter_shapes()     
+    print("parameters:", parameters)
+    print("parameter shapes:", shapes)
+    print("expected distribution batch shape:", exp_dist_batch_shape)
+    for analysis_name, par_dict in parameters.items(): 
+        analysis_batch_shape = c.dist_batch_shape(par_dict, shapes[analysis_name])
+        print("inferred analysis batch shape:", analysis_batch_shape)
+        assert exp_dist_batch_shape == analysis_batch_shape # TODO: May need to generalise in future
+     
+def test_bcast_sample_batch_shape():
+    bcast_samples = c.bcast_sample_batch_shape(event_shapes, dist_batch_shape, samples=samples)
+ 

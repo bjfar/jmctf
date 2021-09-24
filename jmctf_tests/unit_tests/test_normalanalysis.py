@@ -16,11 +16,17 @@ def get_obj():
 
 def get_single_hypothesis():
     pars = {'mu': tf.constant(1.5,dtype=c.TFdtype)}
-    return pars
+    # Shape info for testing against automatically inferred shapes
+    exp_batch_shapes = {'mu': ()}
+    exp_dist_batch_shape = ()
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_three_hypotheses():
     pars = {'mu': tf.constant([0.,1.,2.],dtype=c.TFdtype)}
-    return pars
+    # Shape info for testing against automatically inferred shapes
+    exp_batch_shapes = {'mu': (3,)}
+    exp_dist_batch_shape = (3,) 
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_hypothesis_curves():
     """Curves of hypotheses that should almost always encompass the best-fit point

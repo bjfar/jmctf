@@ -1084,6 +1084,13 @@ class JointDistribution(tfd.JointDistributionNamed):
         event_shapes = self.event_shapes() 
         par_shapes = self.parameter_shapes()
         dist_batch_shape = c.all_dist_batch_shape(parameters, par_shapes)
+        print("in expected_batch_shape_nuis:")
+        print("  parameters:", parameters)
+        print("  samples:", samples)
+        print("  sample_shape:", sample_shape)
+        print("  event_shapes:", event_shapes)
+        print("  par_shapes:", par_shapes)
+        print("  dist_batch_shape:", dist_batch_shape)        
         if sample_shape is not None and samples is not None:
             raise ValueError("Please provide only one of 'samples' or 'sample_shape' as arguments")
         elif sample_shape is None and samples is not None:
@@ -1093,12 +1100,5 @@ class JointDistribution(tfd.JointDistributionNamed):
             bcast_dist_batch_shape = c.bcast_sample_batch_shape(event_shapes, dist_batch_shape, sample_shape=sample_shape)
         else:
             raise ValueError("Either 'samples' or 'sample_shape' must be provided!")
-        print("in expected_batch_shape_nuis:")
-        print("  parameters:", parameters)
-        print("  samples:", samples)
-        print("  sample_shape:", sample_shape)
-        print("  event_shapes:", event_shapes)
-        print("  par_shapes:", par_shapes)
-        print("  dist_batch_shape:", dist_batch_shape)
         print("  bcast_dist_batch_shape:", bcast_dist_batch_shape)
         return bcast_dist_batch_shape

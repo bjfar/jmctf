@@ -358,3 +358,7 @@ def test_quad_logl(joint_fitted_nuisance,fitted_log_prob,fitted_pars,quad_prep,s
 #     print("H:", H)
 #     #assert False
 
+def test_expected_batch_shape_nuis():
+
+    expected_batch_shape_nuis(self, parameters, samples=None, sample_shape=None):
+

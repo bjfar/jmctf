@@ -18,7 +18,9 @@ def get_single_hypothesis():
     pars = {'s': tf.constant((0.,0.),dtype=c.TFdtype), 
             'theta': tf.constant((0.,0.),dtype=c.TFdtype)
             }
-    return pars
+    exp_batch_shapes = {'s': (), 'theta': ()}
+    exp_dist_batch_shape = ()
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_three_hypotheses():
     pars = {'s': tf.constant([(0.,0.),
@@ -28,7 +30,9 @@ def get_three_hypotheses():
                                   (0.,0.),
                                   (0.,0.)],dtype=c.TFdtype)
             }
-    return pars
+    exp_batch_shapes = {'s': (3,), 'theta': (3,)}
+    exp_dist_batch_shape = (3,)
+    return pars, exp_batch_shapes, exp_dist_batch_shape
 
 def get_hypothesis_curves():
     """Curves of hypotheses that should almost always encompass the best-fit point
