@@ -41,7 +41,7 @@ def analysis_params_Hshape(request):
 
 @pytest.fixture(scope="module")
 def analysis_params(analysis_params_Hshape):
-    analysis, params, H_shape = analysis_params_Hshape
+    analysis, (params, bs, dist_bs), H_shape = analysis_params_Hshape
     return analysis, params
 
 @pytest.fixture(scope="module")
@@ -358,7 +358,7 @@ def test_quad_logl(joint_fitted_nuisance,fitted_log_prob,fitted_pars,quad_prep,s
 #     print("H:", H)
 #     #assert False
 
-def test_expected_batch_shape_nuis():
+#def test_expected_batch_shape_nuis():
 
-    expected_batch_shape_nuis(self, parameters, samples=None, sample_shape=None):
+#    expected_batch_shape_nuis(self, parameters, samples=None, sample_shape=None):
 

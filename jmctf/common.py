@@ -247,7 +247,9 @@ def convert_to_TF_constants(val,ignore_variables=False,auto_convert_dtype=True):
            out = tf.constant(val, dtype=TFdtype)
            #print(k, 'converted to tf.Tensor:', val)
        except Exception as e:
-           msg = "Failed to convert values for key {0} to a TensorFlow Tensor object! See associated exception for more information. Values were: {1}".format(k,val)
+           msg = ("Failed to convert value to a TensorFlow Tensor object! "
+                  "See associated exception for more information. Value was: "
+                  "{}".format(val))
            raise ValueError(msg) from e
    return out
 
@@ -689,6 +691,52 @@ def bcast_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
         out[name] = tf.broadcast_to(p,new_shape)
     return out
 
+def make_samples_orthogonal(event_shapes, ref_batch_shape, samples):
+    """Change shape of samples such that they will broadcast orthogonally 
+       against a specified batch shape in a minimal way, i.e. where sample 
+       dims were already orthogonal to distribution batch dims then we 
+       avoid adding extra size 1 dims, and we only add the minimal number
+       of batch dimensions to the sample required to make it orthogonal
+       to the ref_batch_dims.
+       """
+    
+    # sample+batch shape implied by current shape of the samples
+    current_batch_shape = sample_batch_shape(samples, event_shapes)
+    N = len(current_batch_shape)
+    print("current_batch_shape:", current_batch_shape)
+    print("ref_batch_shape:", ref_batch_shape)
+    # We want to add singlet dims on the right of the current sample+batch shape until
+    # the non-singlet reference batch dims broadcast against singlet sample dims.
+    # So, count the non-singlet ref dims, count the singlet sample dims, and add dims
+    # until the latter matches the former
+    if len(current_batch_shape)>0:
+        Nls = [d==1 for d in current_batch_shape][::-1].index(0) # Number of singlet dims on right of sample shape
+    else:
+        Nls = 0
+    if len(ref_batch_shape)>0:
+        Nrefs = [d==1 for d in ref_batch_shape].index(0) # Number of singlet dims on left of reference shape
+    else:
+        Nrefs = 0
+    Nref = len(ref_batch_shape) - Nrefs # Number of non-singlet dims on right of reference shape
+
+    print("Nls:", Nls)
+    print("Nref:", Nref)
+
+    out = {}
+    if Nref > Nls:
+        for name,x in samples.items():
+            eshape = event_shapes[name]
+            print("eshape:", name, eshape)
+            new_shape = ([d for d in current_batch_shape] 
+                       + [1 for d in range(Nref-Nls)]
+                       + [d for d in eshape])
+            print("new_shape:", new_shape)
+            out[name] = tf.reshape(x, new_shape)
+    else:
+        # Should broadcast orthogonally already
+        out = samples
+    return out
+          
 def bcast_all_dist_batch_shape(parameters,parameter_shapes,new_batch_shape):
     """As bcast_dist_batch_shape, but applies over 'analysis' level of parameter dictionaries"""
     out = {ka: bcast_dist_batch_shape(pars,parameter_shapes[ka],new_batch_shape) for ka,pars in parameters.items()}

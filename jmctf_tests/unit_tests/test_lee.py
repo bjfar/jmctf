@@ -44,8 +44,8 @@ def get_hyp_gen_1(hypothesis):
                ,ids = [name for name in analysis_tests.keys()]
                 )
 def analysis_params(request):
-    analysis, params1, paramsN = request.param
-    return analysis, params1, paramsN 
+    analysis, (pars1, bs1, dist_bs1), (parsN, bsN, dist_bs_N) = request.param
+    return analysis, pars1, parsN 
 
 @pytest.fixture(scope="module",params=N_test_events)
 def Nevents(request):

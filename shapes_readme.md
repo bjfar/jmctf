@@ -14,7 +14,7 @@ and batch_shape is any extra dimensions arising from having tensors of input par
 "batches" of distributions.
 sample_shape is created when drawing samples, i.e. if we do distribution.sample(tensor) then
 the sample returned will have shape (sample_shape,batch_shape,event_shape), where 
-sample_shape = tensor (i.e. if tensor is (20,5) then you generate a 20x5 array of
+sample_shape = tensor.shape (i.e. if tensor is (20,5) then you generate a 20x5 array of
 samples, each with shape (batch_shape,event_shape)).
 
 When computing log_prob, the broadcasting works as follows. Say we do:
